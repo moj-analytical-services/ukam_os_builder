@@ -103,7 +103,8 @@ def _build_parser() -> argparse.ArgumentParser:
         help=(
             "Comma-separated NGD feature stems to exclude "
             "(builtaddress, prebuildaddress, historicaddress, nonaddressableobject, "
-            "royalmailaddress, *_altadd)."
+            "royalmailaddress). Matching alternate-address files are excluded with "
+            "their feature stem."
         ),
     )
     parser.add_argument(

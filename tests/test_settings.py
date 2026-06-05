@@ -216,14 +216,14 @@ def test_load_settings_validates_ngd_excluded_stems(
         processing:
           ngd_excluded_stems:
             - HistoricAddress
-            - "*_ALTADD"
+            - prebuildaddress
             - historicaddress
         """,
     )
 
     settings = load_settings(config_path, load_env=False)
 
-    assert settings.processing.ngd_excluded_stems == ["historicaddress", "*_altadd"]
+    assert settings.processing.ngd_excluded_stems == ["historicaddress", "prebuildaddress"]
 
 
 def test_load_settings_rejects_invalid_ngd_excluded_stem(

@@ -4,8 +4,6 @@ from collections.abc import Iterable
 from pathlib import Path
 from typing import Any
 
-NGD_ALTADD_EXCLUSION = "*_altadd"
-
 NGD_CORE_FILE_STEM_BY_EXCLUSION = {
     "builtaddress": "add_gb_builtaddress",
     "prebuildaddress": "add_gb_prebuildaddress",
@@ -14,14 +12,12 @@ NGD_CORE_FILE_STEM_BY_EXCLUSION = {
     "royalmailaddress": "add_gb_royalmailaddress",
 }
 
-VALID_NGD_EXCLUDED_STEMS = frozenset(
-    (*NGD_CORE_FILE_STEM_BY_EXCLUSION.keys(), NGD_ALTADD_EXCLUSION)
-)
+VALID_NGD_EXCLUDED_STEMS = frozenset(NGD_CORE_FILE_STEM_BY_EXCLUSION)
 
 
 def format_valid_ngd_excluded_stems() -> str:
     """Return valid NGD exclusion options for error messages and help text."""
-    return ", ".join((*NGD_CORE_FILE_STEM_BY_EXCLUSION.keys(), NGD_ALTADD_EXCLUSION))
+    return ", ".join(NGD_CORE_FILE_STEM_BY_EXCLUSION)
 
 
 def normalise_ngd_excluded_stems(values: Iterable[Any] | None) -> list[str]:
@@ -74,21 +70,18 @@ def is_ngd_address_file(name: str) -> bool:
 def ngd_file_matches_excluded_stem(name: str, excluded_stems: Iterable[Any] | None) -> bool:
     """Return True when an NGD file name matches configured exclusions.
 
-    Core feature options match exact file stems.
-    historicaddress matches add_gb_historicaddress but not add_gb_historicaddress_altadd
-    *_altadd option matches every NGD alternate-address file.
+    Feature options match the core feature file and its alternate-address file,
+    so ``builtaddress`` matches both ``add_gb_builtaddress`` and
+    ``add_gb_builtaddress_altadd``.
     """
     excluded = set(normalise_ngd_excluded_stems(excluded_stems))
     if not excluded:
         return False
 
     file_stem = Path(name).stem.lower()
-    if NGD_ALTADD_EXCLUSION in excluded and file_stem.startswith("add_gb_"):
-        if file_stem.endswith("_altadd"):
-            return True
 
     return any(
-        file_stem == ngd_file_stem
+        file_stem in {ngd_file_stem, f"{ngd_file_stem}_altadd"}
         for excluded_stem, ngd_file_stem in NGD_CORE_FILE_STEM_BY_EXCLUSION.items()
         if excluded_stem in excluded
     )

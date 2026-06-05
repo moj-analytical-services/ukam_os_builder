@@ -45,7 +45,8 @@ processing:
 
   # NGD feature stems to exclude from download, extract, and flatfile processing
   # Valid values: builtaddress, prebuildaddress, historicaddress,
-  # nonaddressableobject, royalmailaddress, "*_altadd"
+  # nonaddressableobject, royalmailaddress
+  # Matching alternate-address files are excluded with their feature stem.
   ngd_excluded_stems: []
 
   # ABP LPI logical statuses to exclude from flatfile processing

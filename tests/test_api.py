@@ -54,13 +54,13 @@ def test_create_config_and_env_writes_ngd_excluded_stems(tmp_path: Path) -> None
         source="ngd",
         package_id="16331",
         version_id="104444",
-        ngd_excluded_stems=["HistoricAddress", "*_ALTADD", "historicaddress"],
+        ngd_excluded_stems=["HistoricAddress", "prebuildaddress", "historicaddress"],
     )
 
     config_text = config_path.read_text()
     assert "ngd_excluded_stems:" in config_text
     assert "    - historicaddress" in config_text
-    assert '    - "*_altadd"' in config_text
+    assert "    - prebuildaddress" in config_text
 
 
 def test_create_config_and_env_writes_abp_excluded_logical_statuses(tmp_path: Path) -> None:
@@ -162,7 +162,7 @@ def test_run_from_config_applies_overrides(
         list_only=True,
         force=True,
         num_chunks=5,
-        ngd_excluded_stems="historicaddress,*_altadd",
+        ngd_excluded_stems="historicaddress,prebuildaddress",
         abp_excluded_logical_statuses="8,3",
     )
 
@@ -171,7 +171,7 @@ def test_run_from_config_applies_overrides(
     assert calls["force"] is True
     assert calls["list_only"] is True
     assert calls["num_chunks"] == 5
-    assert calls["ngd_excluded_stems"] == ["historicaddress", "*_altadd"]
+    assert calls["ngd_excluded_stems"] == ["historicaddress", "prebuildaddress"]
     assert calls["abp_excluded_logical_statuses"] == [8, 3]
 
 

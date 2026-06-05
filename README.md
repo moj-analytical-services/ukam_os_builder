@@ -255,8 +255,9 @@ Welsh language variants are extracted where available and appear as separate row
 By default, all listed NGD feature types are processed. To exclude feature types, set
 `processing.ngd_excluded_stems` in `config.yaml` or pass `--ngd-excluded-stems`.
 Valid values are `builtaddress`, `prebuildaddress`, `historicaddress`,
-`nonaddressableobject`, `royalmailaddress`, and `*_altadd`. Core feature names match only
-their core files; use `*_altadd` to exclude alternate-address files.
+`nonaddressableobject`, and `royalmailaddress`. When a feature stem is excluded, its
+matching alternate-address file is excluded too; for example, `builtaddress` excludes
+both `add_gb_builtaddress` and `add_gb_builtaddress_altadd`.
 
 ABP LPI logical statuses are also all processed by default, including Historic
 (`logical_status=8`). To exclude ABP statuses, set
