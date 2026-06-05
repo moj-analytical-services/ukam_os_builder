@@ -10,22 +10,24 @@ from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 import requests
 
 from ukam_os_builder.api.settings import Settings
+from ukam_os_builder.data_sources.ngd.ngd_exclusions import (
+    get_configured_ngd_excluded_stems,
+    ngd_file_matches_excluded_stem,
+)
 
 logger = logging.getLogger(__name__)
 
 API_BASE_URL = "https://api.os.uk/downloads/v1"
 
-# NGD file stems to exclude (historic addresses are not used in output)
-_NGD_EXCLUDED_STEMS = {"historicaddress"}
-
-
 def _should_skip_ngd_download(filename: str, settings: object) -> bool:
-    """Return True if *filename* is an NGD historic-address archive."""
+    """Return True if *filename* matches configured NGD feature exclusions."""
     source_type = getattr(getattr(settings, "source", None), "type", "")
     if source_type != "ngd":
         return False
-    name_lower = filename.lower()
-    return any(stem in name_lower for stem in _NGD_EXCLUDED_STEMS)
+    return ngd_file_matches_excluded_stem(
+        filename,
+        get_configured_ngd_excluded_stems(settings),
+    )
 
 
 DEFAULT_CHUNK_SIZE = 1024 * 1024 * 20  # 20 MiB
@@ -333,9 +335,8 @@ def run_download_step(
                 logger.warning("No URL for %s, skipping", item.filename)
                 continue
 
-            # Skip NGD historic address files — they are excluded from output
             if _should_skip_ngd_download(item.filename, settings):
-                logger.info("Skipping historic address file: %s", item.filename)
+                logger.info("Skipping excluded NGD file: %s", item.filename)
                 continue
 
             dest_path = downloads_dir / item.filename

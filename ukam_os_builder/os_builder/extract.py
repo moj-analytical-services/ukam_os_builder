@@ -8,12 +8,13 @@ from pathlib import Path
 import duckdb
 
 from ukam_os_builder.api.settings import Settings
+from ukam_os_builder.data_sources.ngd.ngd_exclusions import (
+    get_configured_ngd_excluded_stems,
+    is_ngd_address_file,
+    ngd_file_matches_excluded_stem,
+)
 
 logger = logging.getLogger(__name__)
-
-# NGD file stems to exclude (historic addresses are not used in output)
-_NGD_EXCLUDED_STEMS = {"historicaddress"}
-
 
 def find_downloaded_zips(downloads_dir: Path) -> list[Path]:
     """Find all downloaded zip files in a directory."""
@@ -25,22 +26,21 @@ def find_downloaded_zips(downloads_dir: Path) -> list[Path]:
     return zip_files
 
 
-def _is_excluded_ngd_file(name: str) -> bool:
-    """Return True if *name* matches an excluded NGD stem (e.g. historicaddress)."""
-    name_lower = name.lower()
-    return any(stem in name_lower for stem in _NGD_EXCLUDED_STEMS)
-
-
-def _filter_zips_for_source(zip_files: list[Path], source: str) -> list[Path]:
+def _filter_zips_for_source(
+    zip_files: list[Path],
+    source: str,
+    ngd_excluded_stems: list[str] | None = None,
+) -> list[Path]:
     source_lower = source.lower()
     if source_lower == "ngd":
-        ngd_zips = [
+        ngd_zips = [zip_path for zip_path in zip_files if is_ngd_address_file(zip_path.name)]
+        if not ngd_zips:
+            return zip_files
+        return [
             zip_path
-            for zip_path in zip_files
-            if zip_path.name.lower().startswith("add_gb_")
-            and not _is_excluded_ngd_file(zip_path.name)
+            for zip_path in ngd_zips
+            if not ngd_file_matches_excluded_stem(zip_path.name, ngd_excluded_stems)
         ]
-        return ngd_zips or zip_files
     if source_lower == "abp":
         abp_zips = [
             zip_path for zip_path in zip_files if "addressbasepremium" in zip_path.name.lower()
@@ -49,10 +49,16 @@ def _filter_zips_for_source(zip_files: list[Path], source: str) -> list[Path]:
     return zip_files
 
 
-def _should_convert_csv_to_parquet(csv_path: Path, source: str) -> bool:
+def _should_convert_csv_to_parquet(
+    csv_path: Path,
+    source: str,
+    ngd_excluded_stems: list[str] | None = None,
+) -> bool:
     if source.lower() == "ngd":
-        name_lower = csv_path.name.lower()
-        return name_lower.startswith("add_gb_") and not _is_excluded_ngd_file(name_lower)
+        return is_ngd_address_file(csv_path.name) and not ngd_file_matches_excluded_stem(
+            csv_path.name,
+            ngd_excluded_stems,
+        )
     return True
 
 
@@ -218,7 +224,8 @@ def run_extract_step(
         return []
 
     source_type = settings.source.type
-    filtered_zip_files = _filter_zips_for_source(zip_files, source_type)
+    ngd_excluded_stems = get_configured_ngd_excluded_stems(settings)
+    filtered_zip_files = _filter_zips_for_source(zip_files, source_type, ngd_excluded_stems)
     if len(filtered_zip_files) != len(zip_files):
         logger.info(
             "Filtered %d zip file(s) for source '%s' (from %d total)",
@@ -241,7 +248,11 @@ def run_extract_step(
             # Convert each CSV to parquet
             parquet_dir = extracted_dir / "parquet"
             for csv_path in csv_paths:
-                if not _should_convert_csv_to_parquet(csv_path, source_type):
+                if not _should_convert_csv_to_parquet(
+                    csv_path,
+                    source_type,
+                    ngd_excluded_stems,
+                ):
                     logger.debug(
                         "Skipping CSV-to-parquet for source '%s': %s", source_type, csv_path
                     )

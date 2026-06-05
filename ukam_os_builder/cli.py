@@ -98,6 +98,21 @@ def _build_parser() -> argparse.ArgumentParser:
         type=int,
         help="Override processing.parquet_compression_level.",
     )
+    parser.add_argument(
+        "--ngd-excluded-stems",
+        help=(
+            "Comma-separated NGD feature stems to exclude "
+            "(builtaddress, prebuildaddress, historicaddress, nonaddressableobject, "
+            "royalmailaddress, *_altadd)."
+        ),
+    )
+    parser.add_argument(
+        "--abp-excluded-logical-statuses",
+        help=(
+            "Comma-separated ABP LPI logical statuses to exclude "
+            "(1=approved, 3=alternative, 6=provisional, 8=historic)."
+        ),
+    )
 
     parser.add_argument(
         "--verbose",
@@ -144,6 +159,8 @@ def main(argv: list[str] | None = None) -> int:
             duckdb_memory_limit=args.duckdb_memory_limit,
             parquet_compression=args.parquet_compression,
             parquet_compression_level=args.parquet_compression_level,
+            ngd_excluded_stems=args.ngd_excluded_stems,
+            abp_excluded_logical_statuses=args.abp_excluded_logical_statuses,
         )
         console.print("[bold green]Build completed successfully[/bold green]")
         return 0

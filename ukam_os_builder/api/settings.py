@@ -8,7 +8,10 @@ from typing import Any, Literal
 import duckdb
 import yaml
 from dotenv import load_dotenv
-from pydantic import BaseModel, ConfigDict, SecretStr, ValidationError, field_validator
+from pydantic import BaseModel, ConfigDict, Field, SecretStr, ValidationError, field_validator
+
+from ukam_os_builder.data_sources.abp.abp_exclusions import normalise_abp_excluded_logical_statuses
+from ukam_os_builder.data_sources.ngd.ngd_exclusions import normalise_ngd_excluded_stems
 
 logger = logging.getLogger(__name__)
 
@@ -78,6 +81,8 @@ class ProcessingSettings(StrictBaseModel):
     parquet_compression_level: int = 9
     duckdb_memory_limit: str | None = None
     num_chunks: int = 20
+    ngd_excluded_stems: list[str] = Field(default_factory=list)
+    abp_excluded_logical_statuses: list[int] = Field(default_factory=list)
 
     @field_validator("num_chunks")
     @classmethod
@@ -85,6 +90,20 @@ class ProcessingSettings(StrictBaseModel):
         if value < 1:
             raise ValueError("must be >= 1")
         return value
+
+    @field_validator("ngd_excluded_stems", mode="before")
+    @classmethod
+    def _validate_ngd_excluded_stems(cls, value: Any) -> list[str]:
+        if isinstance(value, str):
+            raise ValueError("must be a list of NGD feature stems")
+        return normalise_ngd_excluded_stems(value)
+
+    @field_validator("abp_excluded_logical_statuses", mode="before")
+    @classmethod
+    def _validate_abp_excluded_logical_statuses(cls, value: Any) -> list[int]:
+        if isinstance(value, str):
+            raise ValueError("must be a list of ABP logical statuses")
+        return normalise_abp_excluded_logical_statuses(value)
 
 
 class Settings(StrictBaseModel):

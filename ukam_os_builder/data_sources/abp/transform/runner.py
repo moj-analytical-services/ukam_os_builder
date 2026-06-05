@@ -27,6 +27,7 @@ import logging
 from pathlib import Path
 from time import perf_counter
 
+from ukam_os_builder.data_sources.abp.abp_exclusions import get_configured_abp_excluded_logical_statuses
 from ukam_os_builder.api.settings import Settings, create_duckdb_connection
 from ukam_os_builder.data_sources.abp.transform.common import (
     assert_inputs_exist,
@@ -146,7 +147,10 @@ def _transform_to_flatfile_chunk(
     """)
     lpi.prepare_street_descriptor_views(con, usrn_filter_view="usrns_in_chunk")
 
-    lpi.prepare_lpi_base(con)
+    lpi.prepare_lpi_base(
+        con,
+        excluded_logical_statuses=get_configured_abp_excluded_logical_statuses(settings),
+    )
     postal.prepare_best_delivery(con)
     misc.prepare_classification_best(con)
     logger.debug("Preparation completed in %.2f seconds", perf_counter() - t0)

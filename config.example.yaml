@@ -42,3 +42,12 @@ processing:
   # Use higher values (e.g., 10) for lower memory usage on laptops
   # Output will be split into multiple parquet files, one per chunk
   num_chunks: 20
+
+  # NGD feature stems to exclude from download, extract, and flatfile processing
+  # Valid values: builtaddress, prebuildaddress, historicaddress,
+  # nonaddressableobject, royalmailaddress, "*_altadd"
+  ngd_excluded_stems: []
+
+  # ABP LPI logical statuses to exclude from flatfile processing
+  # Valid values: 1 (approved), 3 (alternative), 6 (provisional), 8 (historic)
+  abp_excluded_logical_statuses: []

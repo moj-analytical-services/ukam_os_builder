@@ -70,15 +70,15 @@ matching messy user input. We output variants based on **Logical Status**:
     locally known as "Rose Cottage").
 3.  **Provisional (6):** The address assigned during planning/construction, which
     might change before the house is built.
-
-Historic addresses (logical_status=8) are excluded from output.
+4.  **Historic (8):** An old address. If "10 High St" is renumbered to "12 High St",
+    the old address is kept as Historic. This helps match old datasets.
 
 ------------------------------------------------------------------------------
 Key Columns Explained
 ------------------------------------------------------------------------------
 *   `uprn`: The "Golden Key". Use this to link this address to other data.
 *   `base_address`: The constructed full address string.
-*   `logical_status`: 1=Current, 6=Provisional.
+*   `logical_status`: 1=Current, 6=Provisional, 8=Historic.
 *   `official_flag`: 'Y' indicates this is the "official" version, 'N' suggests
     it might be an unofficial alias.
 *   `language`: 'ENG' (English) or 'CYM' (Welsh). Streets in Wales often have
@@ -88,6 +88,15 @@ Key Columns Explained
 from __future__ import annotations
 
 import duckdb
+
+from ukam_os_builder.data_sources.abp.abp_exclusions import included_abp_logical_statuses
+
+
+def _status_list_sql(excluded_logical_statuses: list[int] | None = None) -> str:
+    statuses = included_abp_logical_statuses(excluded_logical_statuses)
+    if not statuses:
+        return "NULL"
+    return ", ".join(str(status) for status in statuses)
 
 
 def prepare_street_descriptor_views(
@@ -139,7 +148,10 @@ def prepare_street_descriptor_views(
     """)
 
 
-def prepare_lpi_base(con: duckdb.DuckDBPyConnection) -> None:
+def prepare_lpi_base(
+    con: duckdb.DuckDBPyConnection,
+    excluded_logical_statuses: list[int] | None = None,
+) -> None:
     """Create materialised LPI base tables with address components.
 
     Note: This function requires that `parent_uprns_with_children` temp table
@@ -147,8 +159,10 @@ def prepare_lpi_base(con: duckdb.DuckDBPyConnection) -> None:
     full BLPU dataset to correctly identify parent UPRNs even when their
     children are in different chunks.
     """
+    logical_statuses_sql = _status_list_sql(excluded_logical_statuses)
+
     con.execute("DROP TABLE IF EXISTS lpi_base_full")
-    con.execute("""
+    con.execute(f"""
         CREATE TEMPORARY TABLE lpi_base_full AS
         SELECT
             l.uprn,
@@ -183,6 +197,7 @@ def prepare_lpi_base(con: duckdb.DuckDBPyConnection) -> None:
                 WHEN 1 THEN 0
                 WHEN 3 THEN 1
                 WHEN 6 THEN 2
+                WHEN 8 THEN 3
                 ELSE 9
             END AS status_rank
         FROM lpi l
@@ -191,7 +206,7 @@ def prepare_lpi_base(con: duckdb.DuckDBPyConnection) -> None:
         LEFT JOIN _sd_best_by_lang sd_lang ON sd_lang.usrn = l.usrn AND sd_lang.language = l.language
         LEFT JOIN _sd_best_any sd_any ON sd_any.usrn = l.usrn
         WHERE (b.addressbase_postal != 'N' OR b.addressbase_postal IS NULL)
-          AND l.logical_status IN (1, 3, 6)
+          AND l.logical_status IN ({logical_statuses_sql})
     """)
 
     # Deduplicated distinct addresses
@@ -218,7 +233,7 @@ def prepare_lpi_base(con: duckdb.DuckDBPyConnection) -> None:
 
     # Best current LPI per UPRN
     con.execute("DROP TABLE IF EXISTS lpi_best_current")
-    con.execute("""
+    con.execute(f"""
         CREATE TEMPORARY TABLE lpi_best_current AS
         SELECT *
         FROM (
@@ -239,7 +254,7 @@ def prepare_lpi_base(con: duckdb.DuckDBPyConnection) -> None:
                     ORDER BY status_rank, COALESCE(last_update_date, DATE '0001-01-01') DESC
                 ) AS rn
             FROM lpi_base_distinct
-            WHERE logical_status IN (1, 3, 6)
+            WHERE logical_status IN ({logical_statuses_sql})
         )
         WHERE rn = 1
     """)
@@ -265,6 +280,7 @@ def render_variants(con: duckdb.DuckDBPyConnection) -> None:
                 WHEN 1 THEN 'APPROVED'
                 WHEN 3 THEN 'ALTERNATIVE'
                 WHEN 6 THEN 'PROVISIONAL'
+                WHEN 8 THEN 'HISTORICAL'
             END AS variant_label,
             (logical_status = 1) AS is_primary
         FROM lpi_base_distinct

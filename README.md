@@ -89,6 +89,8 @@ create_config_and_env(
   source="ngd",
   package_id="16331",
   version_id="104444",
+  ngd_excluded_stems=[],
+  abp_excluded_logical_statuses=[],
 )
 
 run_from_config(config_path="config.yaml", step="all")
@@ -132,7 +134,7 @@ The tool derives all other directories automatically under `work_dir`.
 | Command | Purpose | Key options |
 |---|---|---|
 | `ukam-os-setup` | Create or update pipeline config interactively | `--config-out`, `--env-out`, `--overwrite-env`, `--non-interactive`, `--source`, `--package-id`, `--version-id` |
-| `ukam-os-build` | Run pipeline stages (`download`, `extract`, `split`, `flatfile`, `all`) | `--config`, `--source`, `--env-file`, `--step`, `--overwrite`, `--list-only`, `--package-id`, `--version-id`, `--work-dir`, `--downloads-dir`, `--extracted-dir`, `--output-dir`, `--num-chunks`, `--duckdb-memory-limit`, `--parquet-compression`, `--parquet-compression-level`, `--verbose` |
+| `ukam-os-build` | Run pipeline stages (`download`, `extract`, `split`, `flatfile`, `all`) | `--config`, `--source`, `--env-file`, `--step`, `--overwrite`, `--list-only`, `--package-id`, `--version-id`, `--work-dir`, `--downloads-dir`, `--extracted-dir`, `--output-dir`, `--num-chunks`, `--duckdb-memory-limit`, `--parquet-compression`, `--parquet-compression-level`, `--ngd-excluded-stems`, `--abp-excluded-logical-statuses`, `--verbose` |
 
 ### Command notes
 
@@ -250,6 +252,18 @@ The pipeline processes these NGD address feature types:
 
 Welsh language variants are extracted where available and appear as separate rows in the output.
 
+By default, all listed NGD feature types are processed. To exclude feature types, set
+`processing.ngd_excluded_stems` in `config.yaml` or pass `--ngd-excluded-stems`.
+Valid values are `builtaddress`, `prebuildaddress`, `historicaddress`,
+`nonaddressableobject`, `royalmailaddress`, and `*_altadd`. Core feature names match only
+their core files; use `*_altadd` to exclude alternate-address files.
+
+ABP LPI logical statuses are also all processed by default, including Historic
+(`logical_status=8`). To exclude ABP statuses, set
+`processing.abp_excluded_logical_statuses` or pass `--abp-excluded-logical-statuses`.
+Valid values are `1` (approved), `3` (alternative), `6` (provisional), and `8`
+(historic).
+
 ## Deduplication
 
 When the same UPRN and address combination appears in multiple sources, records are deduplicated using these internal priority rules:
@@ -320,6 +334,8 @@ processing:
   parquet_compression: zstd
   parquet_compression_level: 9
   num_chunks: 20
+  ngd_excluded_stems: []
+  abp_excluded_logical_statuses: []
   # duckdb_memory_limit: "8GB"
 ```
 
