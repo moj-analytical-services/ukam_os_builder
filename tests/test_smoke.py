@@ -119,6 +119,7 @@ def _prepare_test_parquet(settings: Settings) -> None:
     sample_files = [
         "add_gb_builtaddress.csv",
         "add_gb_builtaddress_altadd.csv",
+        "add_gb_historicaddress.csv",
         "add_gb_royalmailaddress.csv",
         "add_gb_prebuildaddress.csv",
     ]
@@ -183,6 +184,12 @@ def test_flatfile_single_chunk(temp_settings: Settings) -> None:
     ]
     for col in expected_columns:
         assert col in column_names, f"Column {col} should exist in output"
+
+    historic_count = con.execute(f"""
+        SELECT COUNT(*) FROM read_parquet('{output_files[0].as_posix()}')
+        WHERE filename = 'add_gb_historicaddress.parquet'
+    """).fetchone()[0]
+    assert historic_count > 0, "Historic Address records should be processed by default"
 
     con.close()
 

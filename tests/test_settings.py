@@ -194,6 +194,120 @@ def test_load_settings_defaults_source_and_num_chunks(
 
     assert settings.source.type == "ngd"
     assert settings.processing.num_chunks == 20
+    assert settings.processing.ngd_excluded_stems == []
+    assert settings.processing.abp_excluded_logical_statuses == []
+
+
+def test_load_settings_validates_ngd_excluded_stems(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setenv("OS_PROJECT_API_KEY", "key")
+    monkeypatch.setenv("OS_PROJECT_API_SECRET", "secret")
+
+    config_path = tmp_path / "config.yaml"
+    _write_config(
+        config_path,
+        """
+        os_downloads:
+          package_id: "16465"
+          version_id: "104444"
+
+        processing:
+          ngd_excluded_stems:
+            - HistoricAddress
+            - "*_ALTADD"
+            - historicaddress
+        """,
+    )
+
+    settings = load_settings(config_path, load_env=False)
+
+    assert settings.processing.ngd_excluded_stems == ["historicaddress", "*_altadd"]
+
+
+def test_load_settings_rejects_invalid_ngd_excluded_stem(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setenv("OS_PROJECT_API_KEY", "key")
+    monkeypatch.setenv("OS_PROJECT_API_SECRET", "secret")
+
+    config_path = tmp_path / "config.yaml"
+    _write_config(
+        config_path,
+        """
+        os_downloads:
+          package_id: "16465"
+          version_id: "104444"
+
+        processing:
+          ngd_excluded_stems:
+            - not-a-feature
+        """,
+    )
+
+    with pytest.raises(SettingsError) as exc_info:
+        load_settings(config_path, load_env=False)
+
+    assert exc_info.value.validation_error is not None
+    assert "ngd_excluded_stems" in str(exc_info.value.validation_error)
+
+
+def test_load_settings_validates_abp_excluded_logical_statuses(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setenv("OS_PROJECT_API_KEY", "key")
+    monkeypatch.setenv("OS_PROJECT_API_SECRET", "secret")
+
+    config_path = tmp_path / "config.yaml"
+    _write_config(
+        config_path,
+        """
+        os_downloads:
+          package_id: "16465"
+          version_id: "104444"
+
+        processing:
+          abp_excluded_logical_statuses:
+            - "8"
+            - 3
+            - 8
+        """,
+    )
+
+    settings = load_settings(config_path, load_env=False)
+
+    assert settings.processing.abp_excluded_logical_statuses == [8, 3]
+
+
+def test_load_settings_rejects_invalid_abp_excluded_logical_status(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setenv("OS_PROJECT_API_KEY", "key")
+    monkeypatch.setenv("OS_PROJECT_API_SECRET", "secret")
+
+    config_path = tmp_path / "config.yaml"
+    _write_config(
+        config_path,
+        """
+        os_downloads:
+          package_id: "16465"
+          version_id: "104444"
+
+        processing:
+          abp_excluded_logical_statuses:
+            - 2
+        """,
+    )
+
+    with pytest.raises(SettingsError) as exc_info:
+        load_settings(config_path, load_env=False)
+
+    assert exc_info.value.validation_error is not None
+    assert "abp_excluded_logical_statuses" in str(exc_info.value.validation_error)
 
 
 def test_load_settings_applies_path_overrides(
