@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import logging
 import os
-from copy import deepcopy
 from pathlib import Path
 from typing import Any, Literal
 
@@ -28,26 +27,31 @@ logger = logging.getLogger(__name__)
 
 SourceType = Literal["ngd", "abp"]
 
-DEFAULT_CONFIG: dict[str, object] = {
-    "paths": {
-        "work_dir": "./data",
-        "overrides": {},
-    },
-    "source": {
-        "type": "ngd",
-    },
-    "os_downloads": {
-        "package_id": "",
-        "version_id": "",
-    },
-    "processing": {
-        "parquet_compression": "zstd",
-        "parquet_compression_level": 9,
-        "num_chunks": 20,
-        "ngd_excluded_stems": [],
-        "abp_excluded_logical_statuses": [],
-    },
-}
+def _default_config() -> dict[str, object]:
+    """Return fresh default config values."""
+    return {
+        "paths": {
+            "work_dir": "./data",
+            "overrides": {},
+        },
+        "source": {
+            "type": "ngd",
+        },
+        "os_downloads": {
+            "package_id": "",
+            "version_id": "",
+        },
+        "processing": {
+            "parquet_compression": "zstd",
+            "parquet_compression_level": 9,
+            "num_chunks": 20,
+            "ngd_excluded_stems": [],
+            "abp_excluded_logical_statuses": [],
+        },
+    }
+
+
+DEFAULT_CONFIG: dict[str, object] = _default_config()
 
 
 def _render_yaml_list(key: str, values: list[object], *, indent: int = 2) -> str:
@@ -130,25 +134,26 @@ def render_annotated_config(config: dict[str, object]) -> str:
 
 def load_existing_defaults(config_path: Path) -> dict[str, object]:
     """Load existing config as defaults, merged with built-in defaults."""
+    defaults = _default_config()
     if not config_path.exists():
-        return deepcopy(DEFAULT_CONFIG)
+        return defaults
 
     with open(config_path) as f:
         loaded = yaml.safe_load(f) or {}
 
-    merged = deepcopy(DEFAULT_CONFIG) | loaded
+    merged = defaults | loaded
     loaded_paths = loaded.get("paths") if isinstance(loaded.get("paths"), dict) else {}
     merged["paths"] = {
-        "work_dir": loaded_paths.get("work_dir", DEFAULT_CONFIG["paths"]["work_dir"]),
+        "work_dir": loaded_paths.get("work_dir", defaults["paths"]["work_dir"]),
         "overrides": dict(loaded_paths.get("overrides") or {}),
     }
-    merged["source"] = {**deepcopy(DEFAULT_CONFIG["source"]), **(loaded.get("source") or {})}
+    merged["source"] = {**defaults["source"], **(loaded.get("source") or {})}
     merged["os_downloads"] = {
-        **deepcopy(DEFAULT_CONFIG["os_downloads"]),
+        **defaults["os_downloads"],
         **(loaded.get("os_downloads") or {}),
     }
     merged["processing"] = {
-        **deepcopy(DEFAULT_CONFIG["processing"]),
+        **defaults["processing"],
         **(loaded.get("processing") or {}),
     }
     return merged
