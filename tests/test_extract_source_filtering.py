@@ -29,7 +29,7 @@ def test_should_convert_csv_to_parquet_skips_non_ngd_for_ngd_source() -> None:
     assert _should_convert_csv_to_parquet(abp_csv, "ngd") is False
 
 
-def test_filter_zips_for_source_includes_ngd_historicaddress_by_default() -> None:
+def test_filter_zips_for_source_includes_historic_with_empty_exclusions() -> None:
     zip_files = [
         Path("add_gb_builtaddress.zip"),
         Path("add_gb_historicaddress.zip"),
@@ -53,7 +53,11 @@ def test_filter_zips_for_source_uses_configured_ngd_exclusions() -> None:
         Path("add_gb_prebuildaddress_altadd.zip"),
     ]
 
-    filtered = _filter_zips_for_source(zip_files, "ngd", ["historicaddress", "prebuildaddress"])
+    filtered = _filter_zips_for_source(
+        zip_files,
+        "ngd",
+        ["historicaddress", "prebuildaddress"],
+    )
 
     assert filtered == [Path("add_gb_builtaddress.zip")]
 
@@ -69,23 +73,32 @@ def test_core_ngd_exclusion_also_excludes_matching_altadd_files() -> None:
     assert filtered == []
 
 
-def test_should_convert_csv_to_parquet_includes_ngd_historicaddress_by_default() -> None:
-    assert _should_convert_csv_to_parquet(Path("add_gb_builtaddress.csv"), "ngd") is True
-    assert _should_convert_csv_to_parquet(Path("add_gb_historicaddress.csv"), "ngd") is True
-    assert _should_convert_csv_to_parquet(Path("add_gb_historicaddress_altadd.csv"), "ngd") is True
+def test_csv_to_parquet_includes_historic_with_empty_exclusions() -> None:
+    assert _should_convert_csv_to_parquet(
+        Path("add_gb_builtaddress.csv"),
+        "ngd",
+    ) is True
+    assert _should_convert_csv_to_parquet(
+        Path("add_gb_historicaddress.csv"),
+        "ngd",
+    ) is True
+    assert _should_convert_csv_to_parquet(
+        Path("add_gb_historicaddress_altadd.csv"),
+        "ngd",
+    ) is True
 
 
 def test_should_convert_csv_to_parquet_uses_configured_ngd_exclusions() -> None:
     excluded = ["historicaddress"]
 
-    assert _should_convert_csv_to_parquet(Path("add_gb_builtaddress.csv"), "ngd", excluded) is True
-    assert (
-        _should_convert_csv_to_parquet(Path("add_gb_historicaddress.csv"), "ngd", excluded)
-        is False
-    )
+    assert _should_convert_csv_to_parquet(
+        Path("add_gb_builtaddress.csv"),
+        "ngd",
+        excluded,
+    ) is True
     assert (
         _should_convert_csv_to_parquet(
-            Path("add_gb_historicaddress_altadd.csv"),
+            Path("add_gb_historicaddress.csv"),
             "ngd",
             excluded,
         )
@@ -100,5 +113,8 @@ def test_should_skip_ngd_download_uses_configured_exclusions() -> None:
     )
 
     assert _should_skip_ngd_download("add_gb_historicaddress.zip", settings) is True
-    assert _should_skip_ngd_download("add_gb_historicaddress_altadd.zip", settings) is True
+    assert (
+        _should_skip_ngd_download("add_gb_historicaddress_altadd.zip", settings)
+        is True
+    )
     assert _should_skip_ngd_download("add_gb_builtaddress.zip", settings) is False

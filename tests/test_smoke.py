@@ -55,6 +55,7 @@ def temp_settings() -> Generator[Settings, None, None]:
             parquet_compression="zstd",
             parquet_compression_level=1,  # Faster for tests
             num_chunks=1,
+            ngd_excluded_stems=[],
         )
 
         settings = Settings(
@@ -99,6 +100,7 @@ def temp_settings_chunked() -> Generator[Settings, None, None]:
             parquet_compression="zstd",
             parquet_compression_level=1,
             num_chunks=2,
+            ngd_excluded_stems=[],
         )
 
         settings = Settings(
@@ -189,7 +191,9 @@ def test_flatfile_single_chunk(temp_settings: Settings) -> None:
         SELECT COUNT(*) FROM read_parquet('{output_files[0].as_posix()}')
         WHERE filename = 'add_gb_historicaddress.parquet'
     """).fetchone()[0]
-    assert historic_count > 0, "Historic Address records should be processed by default"
+    assert (
+        historic_count > 0
+    ), "Historic Address records should be processed when included"
 
     con.close()
 

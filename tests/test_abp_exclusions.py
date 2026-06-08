@@ -8,7 +8,7 @@ from ukam_os_builder.data_sources.abp.abp_exclusions import (
 )
 
 
-def test_abp_logical_statuses_include_historic_by_default() -> None:
+def test_abp_logical_statuses_include_historic_with_empty_exclusions() -> None:
     assert included_abp_logical_statuses([]) == [1, 3, 6, 8]
 
 

@@ -194,8 +194,8 @@ def test_load_settings_defaults_source_and_num_chunks(
 
     assert settings.source.type == "ngd"
     assert settings.processing.num_chunks == 20
-    assert settings.processing.ngd_excluded_stems == []
-    assert settings.processing.abp_excluded_logical_statuses == []
+    assert settings.processing.ngd_excluded_stems == ["historicaddress"]
+    assert settings.processing.abp_excluded_logical_statuses == [8]
 
 
 def test_load_settings_validates_ngd_excluded_stems(

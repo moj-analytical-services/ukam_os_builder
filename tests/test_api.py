@@ -36,8 +36,10 @@ def test_create_config_and_env_writes_expected_files(tmp_path: Path) -> None:
     assert 'package_id: "16331"' in config_text
     assert 'version_id: "104444"' in config_text
     assert "num_chunks: 20" in config_text
-    assert "ngd_excluded_stems: []" in config_text
-    assert "abp_excluded_logical_statuses: []" in config_text
+    assert "ngd_excluded_stems:" in config_text
+    assert "    - historicaddress" in config_text
+    assert "abp_excluded_logical_statuses:" in config_text
+    assert "    - 8" in config_text
 
     env_text = env_path.read_text()
     assert "OS_PROJECT_API_KEY=your_api_key_here" in env_text

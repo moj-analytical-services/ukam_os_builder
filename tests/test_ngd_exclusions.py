@@ -18,7 +18,10 @@ def test_ngd_excluded_stems_normalise_and_dedupe() -> None:
 def test_ngd_core_exclusion_matches_core_file_and_altadd_file() -> None:
     excluded = ["historicaddress"]
 
-    assert ngd_file_matches_excluded_stem("add_gb_historicaddress.zip", excluded) is True
+    assert (
+        ngd_file_matches_excluded_stem("add_gb_historicaddress.zip", excluded)
+        is True
+    )
     assert (
         ngd_file_matches_excluded_stem("add_gb_historicaddress_altadd.zip", excluded)
         is True
@@ -28,9 +31,18 @@ def test_ngd_core_exclusion_matches_core_file_and_altadd_file() -> None:
 def test_ngd_feature_exclusion_only_matches_its_own_altadd_file() -> None:
     excluded = ["builtaddress"]
 
-    assert ngd_file_matches_excluded_stem("add_gb_builtaddress_altadd.zip", excluded) is True
-    assert ngd_file_matches_excluded_stem("add_gb_historicaddress_altadd.zip", excluded) is False
-    assert ngd_file_matches_excluded_stem("add_gb_historicaddress.zip", excluded) is False
+    assert (
+        ngd_file_matches_excluded_stem("add_gb_builtaddress_altadd.zip", excluded)
+        is True
+    )
+    assert (
+        ngd_file_matches_excluded_stem("add_gb_historicaddress_altadd.zip", excluded)
+        is False
+    )
+    assert (
+        ngd_file_matches_excluded_stem("add_gb_historicaddress.zip", excluded)
+        is False
+    )
 
 
 def test_ngd_excluded_stems_reject_unknown_stem() -> None:
