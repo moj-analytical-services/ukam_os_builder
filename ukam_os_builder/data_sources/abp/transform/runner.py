@@ -27,8 +27,10 @@ import logging
 from pathlib import Path
 from time import perf_counter
 
-from ukam_os_builder.data_sources.abp.abp_exclusions import get_configured_abp_excluded_logical_statuses
 from ukam_os_builder.api.settings import Settings, create_duckdb_connection
+from ukam_os_builder.data_sources.abp.abp_exclusions import (
+    get_configured_abp_excluded_logical_statuses,
+)
 from ukam_os_builder.data_sources.abp.transform.common import (
     assert_inputs_exist,
     chunk_where,
