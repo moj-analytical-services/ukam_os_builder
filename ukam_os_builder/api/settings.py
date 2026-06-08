@@ -10,8 +10,14 @@ import yaml
 from dotenv import load_dotenv
 from pydantic import BaseModel, ConfigDict, Field, SecretStr, ValidationError, field_validator
 
-from ukam_os_builder.data_sources.abp.abp_exclusions import normalise_abp_excluded_logical_statuses
-from ukam_os_builder.data_sources.ngd.ngd_exclusions import normalise_ngd_excluded_stems
+from ukam_os_builder.data_sources.abp.abp_exclusions import (
+    DEFAULT_ABP_EXCLUDED_LOGICAL_STATUSES,
+    normalise_abp_excluded_logical_statuses,
+)
+from ukam_os_builder.data_sources.ngd.ngd_exclusions import (
+    DEFAULT_NGD_EXCLUDED_STEMS,
+    normalise_ngd_excluded_stems,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -81,8 +87,12 @@ class ProcessingSettings(StrictBaseModel):
     parquet_compression_level: int = 9
     duckdb_memory_limit: str | None = None
     num_chunks: int = 20
-    ngd_excluded_stems: list[str] = Field(default_factory=list)
-    abp_excluded_logical_statuses: list[int] = Field(default_factory=list)
+    ngd_excluded_stems: list[str] = Field(
+        default_factory=lambda: list(DEFAULT_NGD_EXCLUDED_STEMS)
+    )
+    abp_excluded_logical_statuses: list[int] = Field(
+        default_factory=lambda: list(DEFAULT_ABP_EXCLUDED_LOGICAL_STATUSES)
+    )
 
     @field_validator("num_chunks")
     @classmethod

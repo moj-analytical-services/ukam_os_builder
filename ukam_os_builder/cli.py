@@ -104,14 +104,14 @@ def _build_parser() -> argparse.ArgumentParser:
             "Comma-separated NGD feature stems to exclude "
             "(builtaddress, prebuildaddress, historicaddress, nonaddressableobject, "
             "royalmailaddress). Matching alternate-address files are excluded with "
-            "their feature stem."
+            "their feature stem. Default: historicaddress"
         ),
     )
     parser.add_argument(
         "--abp-excluded-logical-statuses",
         help=(
             "Comma-separated ABP LPI logical statuses to exclude "
-            "(1=approved, 3=alternative, 6=provisional, 8=historic)."
+            "(1=approved, 3=alternative, 6=provisional, 8=historic). Default: 8"
         ),
     )
 

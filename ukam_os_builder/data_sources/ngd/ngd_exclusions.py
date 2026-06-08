@@ -13,6 +13,7 @@ NGD_CORE_FILE_STEM_BY_EXCLUSION = {
 }
 
 VALID_NGD_EXCLUDED_STEMS = frozenset(NGD_CORE_FILE_STEM_BY_EXCLUSION)
+DEFAULT_NGD_EXCLUDED_STEMS = ("historicaddress",)
 
 
 def format_valid_ngd_excluded_stems() -> str:
@@ -59,7 +60,9 @@ def parse_ngd_excluded_stems(value: str | Iterable[Any] | None) -> list[str]:
 def get_configured_ngd_excluded_stems(settings: Any) -> list[str]:
     """Read configured NGD exclusions from a settings-like object."""
     processing = getattr(settings, "processing", None)
-    return normalise_ngd_excluded_stems(getattr(processing, "ngd_excluded_stems", []))
+    return normalise_ngd_excluded_stems(
+        getattr(processing, "ngd_excluded_stems", DEFAULT_NGD_EXCLUDED_STEMS)
+    )
 
 
 def is_ngd_address_file(name: str) -> bool:
@@ -67,7 +70,10 @@ def is_ngd_address_file(name: str) -> bool:
     return Path(name).name.lower().startswith("add_gb_")
 
 
-def ngd_file_matches_excluded_stem(name: str, excluded_stems: Iterable[Any] | None) -> bool:
+def ngd_file_matches_excluded_stem(
+    name: str,
+    excluded_stems: Iterable[Any] | None,
+) -> bool:
     """Return True when an NGD file name matches configured exclusions.
 
     Feature options match the core feature file and its alternate-address file,

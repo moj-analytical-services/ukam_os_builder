@@ -5,6 +5,7 @@ from typing import Any
 
 ABP_SUPPORTED_LOGICAL_STATUSES = (1, 3, 6, 8)
 VALID_ABP_EXCLUDED_LOGICAL_STATUSES = frozenset(ABP_SUPPORTED_LOGICAL_STATUSES)
+DEFAULT_ABP_EXCLUDED_LOGICAL_STATUSES = (8,)
 
 
 def format_valid_abp_excluded_logical_statuses() -> str:
@@ -51,7 +52,9 @@ def parse_abp_excluded_logical_statuses(value: str | Iterable[Any] | None) -> li
     if isinstance(value, str):
         if not value.strip():
             return []
-        return normalise_abp_excluded_logical_statuses(part.strip() for part in value.split(","))
+        return normalise_abp_excluded_logical_statuses(
+            part.strip() for part in value.split(",")
+        )
     return normalise_abp_excluded_logical_statuses(value)
 
 
@@ -59,11 +62,19 @@ def get_configured_abp_excluded_logical_statuses(settings: Any) -> list[int]:
     """Read configured ABP logical status exclusions from a settings-like object."""
     processing = getattr(settings, "processing", None)
     return normalise_abp_excluded_logical_statuses(
-        getattr(processing, "abp_excluded_logical_statuses", [])
+        getattr(
+            processing,
+            "abp_excluded_logical_statuses",
+            DEFAULT_ABP_EXCLUDED_LOGICAL_STATUSES,
+        )
     )
 
 
 def included_abp_logical_statuses(excluded_statuses: Iterable[Any] | None) -> list[int]:
     """Return supported ABP LPI logical status after configured exclusions."""
     excluded = set(normalise_abp_excluded_logical_statuses(excluded_statuses))
-    return [status for status in ABP_SUPPORTED_LOGICAL_STATUSES if status not in excluded]
+    return [
+        status
+        for status in ABP_SUPPORTED_LOGICAL_STATUSES
+        if status not in excluded
+    ]

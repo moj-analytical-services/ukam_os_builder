@@ -44,11 +44,15 @@ processing:
   num_chunks: 20
 
   # NGD feature stems to exclude from download, extract, and flatfile processing
+  # Historic addresses are excluded by default
   # Valid values: builtaddress, prebuildaddress, historicaddress,
   # nonaddressableobject, royalmailaddress
   # Matching alternate-address files are excluded with their feature stem.
-  ngd_excluded_stems: []
+  ngd_excluded_stems:
+    - historicaddress
 
   # ABP LPI logical statuses to exclude from flatfile processing
+  # Logical status 8 is excluded by default 
   # Valid values: 1 (approved), 3 (alternative), 6 (provisional), 8 (historic)
-  abp_excluded_logical_statuses: []
+  abp_excluded_logical_statuses:
+    - 8

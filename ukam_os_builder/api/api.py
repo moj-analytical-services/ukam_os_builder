@@ -9,11 +9,13 @@ import requests
 import yaml
 
 from ukam_os_builder.data_sources.abp.abp_exclusions import (
+    DEFAULT_ABP_EXCLUDED_LOGICAL_STATUSES,
     format_valid_abp_excluded_logical_statuses,
     parse_abp_excluded_logical_statuses,
 )
 
 from ukam_os_builder.data_sources.ngd.ngd_exclusions import (
+    DEFAULT_NGD_EXCLUDED_STEMS,
     format_valid_ngd_excluded_stems,
     parse_ngd_excluded_stems,
 )
@@ -45,8 +47,10 @@ def _default_config() -> dict[str, object]:
             "parquet_compression": "zstd",
             "parquet_compression_level": 9,
             "num_chunks": 20,
-            "ngd_excluded_stems": [],
-            "abp_excluded_logical_statuses": [],
+            "ngd_excluded_stems": list(DEFAULT_NGD_EXCLUDED_STEMS),
+            "abp_excluded_logical_statuses": list(
+                DEFAULT_ABP_EXCLUDED_LOGICAL_STATUSES
+            ),
         },
     }
 
@@ -76,6 +80,14 @@ def render_annotated_config(config: dict[str, object]) -> str:
     ngd_excluded_stems = parse_ngd_excluded_stems(processing.get("ngd_excluded_stems"))
     abp_excluded_logical_statuses = parse_abp_excluded_logical_statuses(
         processing.get("abp_excluded_logical_statuses")
+    )
+    ngd_excluded_stems_yaml = _render_yaml_list(
+        "ngd_excluded_stems",
+        ngd_excluded_stems,
+    )
+    abp_excluded_logical_statuses_yaml = _render_yaml_list(
+        "abp_excluded_logical_statuses",
+        abp_excluded_logical_statuses,
     )
 
     duckdb_memory_limit = processing.get("duckdb_memory_limit")
@@ -122,13 +134,15 @@ def render_annotated_config(config: dict[str, object]) -> str:
         "  # Number of chunks to split flatfile processing into (default: 1)\n"
         "  # Use higher values (e.g., 10-20) for lower memory usage\n"
         f"  num_chunks: {processing['num_chunks']}\n\n"
-        "  # NGD feature stems to exclude from download, extract, and flatfile processing\n"
+        "  # NGD feature stems to exclude from pipeline processing\n"
+        "  # (Historic addresses are excluded by default)\n"
         f"  # Valid values: {format_valid_ngd_excluded_stems()}\n"
-        f"{_render_yaml_list('ngd_excluded_stems', ngd_excluded_stems)}\n"
+        f"{ngd_excluded_stems_yaml}\n"
         "  # ABP LPI logical statuses to exclude from flatfile processing\n"
+        "  # (Logical status 8 is excluded by default)\n"
         f"  # Valid values: {format_valid_abp_excluded_logical_statuses()} "
         "(1=approved, 3=alternative, 6=provisional, 8=historic)\n"
-        f"{_render_yaml_list('abp_excluded_logical_statuses', abp_excluded_logical_statuses)}"
+        f"{abp_excluded_logical_statuses_yaml}"
     )
 
 

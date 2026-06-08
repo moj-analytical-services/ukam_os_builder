@@ -89,8 +89,8 @@ create_config_and_env(
   source="ngd",
   package_id="16331",
   version_id="104444",
-  ngd_excluded_stems=[],
-  abp_excluded_logical_statuses=[],
+  ngd_excluded_stems=["historicaddress"],
+  abp_excluded_logical_statuses=[8],
 )
 
 run_from_config(config_path="config.yaml", step="all")
@@ -252,18 +252,28 @@ The pipeline processes these NGD address feature types:
 
 Welsh language variants are extracted where available and appear as separate rows in the output.
 
-By default, all listed NGD feature types are processed. To exclude feature types, set
-`processing.ngd_excluded_stems` in `config.yaml` or pass `--ngd-excluded-stems`.
+By default, NGD Historic Address and ABP Historic LPI records are excluded. 
+Ordnance Survey experts advised that historic addresses can make address matching worse, 
+because many records are not comprehensive old-business history; they can include planning, 
+placeholder, or later replaced address variants that incorrectly match current addresses. 
+Labelled data checks also showed historic records causing incorrect matches. Historic
+records may still improve some use cases, but they should be used carefully because adding 
+them can fix some matches while degrading others. 
+For use cases that need older business or address history, old cuts of NGD BuiltAddress or 
+AddressBase may be more appropriate.
+
+To change NGD feature exclusions, set `processing.ngd_excluded_stems` in
+`config.yaml` or pass `--ngd-excluded-stems`.
 Valid values are `builtaddress`, `prebuildaddress`, `historicaddress`,
 `nonaddressableobject`, and `royalmailaddress`. When a feature stem is excluded, its
 matching alternate-address file is excluded too; for example, `builtaddress` excludes
-both `add_gb_builtaddress` and `add_gb_builtaddress_altadd`.
+both `add_gb_builtaddress` and `add_gb_builtaddress_altadd`. 
+To include NGD historic addresses, set `ngd_excluded_stems: []`.
 
-ABP LPI logical statuses are also all processed by default, including Historic
-(`logical_status=8`). To exclude ABP statuses, set
-`processing.abp_excluded_logical_statuses` or pass `--abp-excluded-logical-statuses`.
-Valid values are `1` (approved), `3` (alternative), `6` (provisional), and `8`
-(historic).
+To change ABP status exclusions, set `processing.abp_excluded_logical_statuses` 
+or pass `--abp-excluded-logical-statuses`.
+Valid values are `1` (approved), `3` (alternative), `6` (provisional), and `8` (historic). 
+To include ABP historical records, set `abp_excluded_logical_statuses: []`.
 
 ## Deduplication
 
@@ -335,8 +345,10 @@ processing:
   parquet_compression: zstd
   parquet_compression_level: 9
   num_chunks: 20
-  ngd_excluded_stems: []
-  abp_excluded_logical_statuses: []
+  ngd_excluded_stems:
+    - historicaddress
+  abp_excluded_logical_statuses:
+    - 8
   # duckdb_memory_limit: "8GB"
 ```
 
