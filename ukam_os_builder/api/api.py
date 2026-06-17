@@ -9,6 +9,16 @@ import requests
 import yaml
 
 from ukam_os_builder.api.settings import Settings, SettingsError, load_settings
+from ukam_os_builder.data_sources.abp.abp_exclusions import (
+    DEFAULT_ABP_EXCLUDED_LOGICAL_STATUSES,
+    format_valid_abp_excluded_logical_statuses,
+    parse_abp_excluded_logical_statuses,
+)
+from ukam_os_builder.data_sources.ngd.ngd_exclusions import (
+    DEFAULT_NGD_EXCLUDED_STEMS,
+    format_valid_ngd_excluded_stems,
+    parse_ngd_excluded_stems,
+)
 from ukam_os_builder.os_builder.os_hub import _get_manifest_path, get_package_version
 from ukam_os_builder.pipeline import run as run_pipeline
 from ukam_os_builder.pipeline import supported_steps_for_source
@@ -17,24 +27,47 @@ logger = logging.getLogger(__name__)
 
 SourceType = Literal["ngd", "abp"]
 
-DEFAULT_CONFIG: dict[str, object] = {
-    "paths": {
-        "work_dir": "./data",
-        "overrides": {},
-    },
-    "source": {
-        "type": "ngd",
-    },
-    "os_downloads": {
-        "package_id": "",
-        "version_id": "",
-    },
-    "processing": {
-        "parquet_compression": "zstd",
-        "parquet_compression_level": 9,
-        "num_chunks": 20,
-    },
-}
+def _default_config() -> dict[str, object]:
+    """Return fresh default config values."""
+    return {
+        "paths": {
+            "work_dir": "./data",
+            "overrides": {},
+        },
+        "source": {
+            "type": "ngd",
+        },
+        "os_downloads": {
+            "package_id": "",
+            "version_id": "",
+        },
+        "processing": {
+            "parquet_compression": "zstd",
+            "parquet_compression_level": 9,
+            "num_chunks": 20,
+            "ngd_excluded_stems": list(DEFAULT_NGD_EXCLUDED_STEMS),
+            "abp_excluded_logical_statuses": list(
+                DEFAULT_ABP_EXCLUDED_LOGICAL_STATUSES
+            ),
+        },
+    }
+
+
+DEFAULT_CONFIG: dict[str, object] = _default_config()
+
+
+def _render_yaml_list(key: str, values: list[object], *, indent: int = 2) -> str:
+    prefix = " " * indent
+    item_prefix = " " * (indent + 2)
+    if not values:
+        return f"{prefix}{key}: []\n"
+
+    lines = [f"{prefix}{key}:"]
+    for value in values:
+        value_text = str(value)
+        rendered_value = f'"{value_text}"' if value_text.startswith("*") else value_text
+        lines.append(f"{item_prefix}- {rendered_value}")
+    return "\n".join(lines) + "\n"
 
 
 def render_annotated_config(config: dict[str, object]) -> str:
@@ -42,6 +75,18 @@ def render_annotated_config(config: dict[str, object]) -> str:
     paths = config["paths"]
     os_downloads = config["os_downloads"]
     processing = config["processing"]
+    ngd_excluded_stems = parse_ngd_excluded_stems(processing.get("ngd_excluded_stems"))
+    abp_excluded_logical_statuses = parse_abp_excluded_logical_statuses(
+        processing.get("abp_excluded_logical_statuses")
+    )
+    ngd_excluded_stems_yaml = _render_yaml_list(
+        "ngd_excluded_stems",
+        ngd_excluded_stems,
+    )
+    abp_excluded_logical_statuses_yaml = _render_yaml_list(
+        "abp_excluded_logical_statuses",
+        abp_excluded_logical_statuses,
+    )
 
     duckdb_memory_limit = processing.get("duckdb_memory_limit")
     duckdb_memory_limit_line = (
@@ -86,31 +131,41 @@ def render_annotated_config(config: dict[str, object]) -> str:
         f"{duckdb_memory_limit_line}\n"
         "  # Number of chunks to split flatfile processing into (default: 1)\n"
         "  # Use higher values (e.g., 10-20) for lower memory usage\n"
-        f"  num_chunks: {processing['num_chunks']}\n"
+        f"  num_chunks: {processing['num_chunks']}\n\n"
+        "  # NGD feature stems to exclude from pipeline processing\n"
+        "  # (Historic addresses are excluded by default)\n"
+        f"  # Valid values: {format_valid_ngd_excluded_stems()}\n"
+        f"{ngd_excluded_stems_yaml}\n"
+        "  # ABP LPI logical statuses to exclude from flatfile processing\n"
+        "  # (Logical status 8 is excluded by default)\n"
+        f"  # Valid values: {format_valid_abp_excluded_logical_statuses()} "
+        "(1=approved, 3=alternative, 6=provisional, 8=historic)\n"
+        f"{abp_excluded_logical_statuses_yaml}"
     )
 
 
 def load_existing_defaults(config_path: Path) -> dict[str, object]:
     """Load existing config as defaults, merged with built-in defaults."""
+    defaults = _default_config()
     if not config_path.exists():
-        return DEFAULT_CONFIG.copy()
+        return defaults
 
     with open(config_path) as f:
         loaded = yaml.safe_load(f) or {}
 
-    merged = DEFAULT_CONFIG | loaded
+    merged = defaults | loaded
     loaded_paths = loaded.get("paths") if isinstance(loaded.get("paths"), dict) else {}
     merged["paths"] = {
-        "work_dir": loaded_paths.get("work_dir", DEFAULT_CONFIG["paths"]["work_dir"]),
+        "work_dir": loaded_paths.get("work_dir", defaults["paths"]["work_dir"]),
         "overrides": dict(loaded_paths.get("overrides") or {}),
     }
-    merged["source"] = {**DEFAULT_CONFIG["source"], **(loaded.get("source") or {})}
+    merged["source"] = {**defaults["source"], **(loaded.get("source") or {})}
     merged["os_downloads"] = {
-        **DEFAULT_CONFIG["os_downloads"],
+        **defaults["os_downloads"],
         **(loaded.get("os_downloads") or {}),
     }
     merged["processing"] = {
-        **DEFAULT_CONFIG["processing"],
+        **defaults["processing"],
         **(loaded.get("processing") or {}),
     }
     return merged
@@ -193,6 +248,8 @@ def create_config_and_env(
     overwrite_env: bool = False,
     paths: dict[str, str] | None = None,
     processing: dict[str, Any] | None = None,
+    ngd_excluded_stems: list[str] | None = None,
+    abp_excluded_logical_statuses: list[int] | None = None,
     api_key: str | None = None,
     api_secret: str | None = None,
 ) -> tuple[Path, Path, bool]:
@@ -213,6 +270,14 @@ def create_config_and_env(
         config["paths"] = {**config["paths"], **paths}
     if processing:
         config["processing"] = {**config["processing"], **processing}
+    if ngd_excluded_stems is not None:
+        config["processing"]["ngd_excluded_stems"] = parse_ngd_excluded_stems(
+            ngd_excluded_stems
+        )
+    if abp_excluded_logical_statuses is not None:
+        config["processing"]["abp_excluded_logical_statuses"] = (
+            parse_abp_excluded_logical_statuses(abp_excluded_logical_statuses)
+        )
 
     return write_config_and_env(
         config=config,
@@ -239,6 +304,8 @@ def apply_run_overrides(
     duckdb_memory_limit: str | None = None,
     parquet_compression: str | None = None,
     parquet_compression_level: int | None = None,
+    ngd_excluded_stems: str | list[str] | None = None,
+    abp_excluded_logical_statuses: str | list[int] | None = None,
 ) -> None:
     """Apply runtime overrides to loaded settings."""
     if source:
@@ -278,6 +345,16 @@ def apply_run_overrides(
     if parquet_compression_level is not None:
         settings.processing.parquet_compression_level = parquet_compression_level
 
+    if ngd_excluded_stems is not None:
+        settings.processing.ngd_excluded_stems = parse_ngd_excluded_stems(
+            ngd_excluded_stems
+        )
+
+    if abp_excluded_logical_statuses is not None:
+        settings.processing.abp_excluded_logical_statuses = (
+            parse_abp_excluded_logical_statuses(abp_excluded_logical_statuses)
+        )
+
 
 def run_from_config(
     config_path: str | Path,
@@ -299,6 +376,8 @@ def run_from_config(
     duckdb_memory_limit: str | None = None,
     parquet_compression: str | None = None,
     parquet_compression_level: int | None = None,
+    ngd_excluded_stems: str | list[str] | None = None,
+    abp_excluded_logical_statuses: str | list[int] | None = None,
     api_key: str | None = None,
     api_secret: str | None = None,
     check_api: bool = True,
@@ -332,6 +411,8 @@ def run_from_config(
         duckdb_memory_limit=duckdb_memory_limit,
         parquet_compression=parquet_compression,
         parquet_compression_level=parquet_compression_level,
+        ngd_excluded_stems=ngd_excluded_stems,
+        abp_excluded_logical_statuses=abp_excluded_logical_statuses,
     )
     logger.info("Resolved work_dir: %s", settings.paths.work_dir)
     source_type = settings.source.type

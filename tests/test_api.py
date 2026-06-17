@@ -36,10 +36,52 @@ def test_create_config_and_env_writes_expected_files(tmp_path: Path) -> None:
     assert 'package_id: "16331"' in config_text
     assert 'version_id: "104444"' in config_text
     assert "num_chunks: 20" in config_text
+    assert "ngd_excluded_stems:" in config_text
+    assert "    - historicaddress" in config_text
+    assert "abp_excluded_logical_statuses:" in config_text
+    assert "    - 8" in config_text
 
     env_text = env_path.read_text()
     assert "OS_PROJECT_API_KEY=your_api_key_here" in env_text
     assert "OS_PROJECT_API_SECRET=your_api_secret_here" in env_text
+
+
+def test_create_config_and_env_writes_ngd_excluded_stems(tmp_path: Path) -> None:
+    config_path = tmp_path / "config.yaml"
+    env_path = tmp_path / ".env"
+
+    create_config_and_env(
+        config_out=config_path,
+        env_out=env_path,
+        source="ngd",
+        package_id="16331",
+        version_id="104444",
+        ngd_excluded_stems=["HistoricAddress", "prebuildaddress", "historicaddress"],
+    )
+
+    config_text = config_path.read_text()
+    assert "ngd_excluded_stems:" in config_text
+    assert "    - historicaddress" in config_text
+    assert "    - prebuildaddress" in config_text
+
+
+def test_create_config_and_env_writes_abp_excluded_logical_statuses(tmp_path: Path) -> None:
+    config_path = tmp_path / "config.yaml"
+    env_path = tmp_path / ".env"
+
+    create_config_and_env(
+        config_out=config_path,
+        env_out=env_path,
+        source="abp",
+        package_id="16331",
+        version_id="104444",
+        abp_excluded_logical_statuses=[8, 3, 8],
+    )
+
+    config_text = config_path.read_text()
+    assert "abp_excluded_logical_statuses:" in config_text
+    assert "    - 8" in config_text
+    assert "    - 3" in config_text
 
 
 def test_create_config_and_env_writes_supplied_api_credentials(tmp_path: Path) -> None:
@@ -108,6 +150,10 @@ def test_run_from_config_applies_overrides(
         calls["force"] = force
         calls["list_only"] = list_only
         calls["num_chunks"] = settings.processing.num_chunks
+        calls["ngd_excluded_stems"] = settings.processing.ngd_excluded_stems
+        calls["abp_excluded_logical_statuses"] = (
+            settings.processing.abp_excluded_logical_statuses
+        )
 
     monkeypatch.setattr("ukam_os_builder.api.api.get_package_version", fake_check_api)
     monkeypatch.setattr("ukam_os_builder.api.api.run_pipeline", fake_run_pipeline)
@@ -118,6 +164,8 @@ def test_run_from_config_applies_overrides(
         list_only=True,
         force=True,
         num_chunks=5,
+        ngd_excluded_stems="historicaddress,prebuildaddress",
+        abp_excluded_logical_statuses="8,3",
     )
 
     assert calls["checked_api"] is True
@@ -125,6 +173,8 @@ def test_run_from_config_applies_overrides(
     assert calls["force"] is True
     assert calls["list_only"] is True
     assert calls["num_chunks"] == 5
+    assert calls["ngd_excluded_stems"] == ["historicaddress", "prebuildaddress"]
+    assert calls["abp_excluded_logical_statuses"] == [8, 3]
 
 
 def test_run_from_config_accepts_api_key_secret_overrides(

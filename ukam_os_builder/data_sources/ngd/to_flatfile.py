@@ -2,7 +2,7 @@
 
 Transforms the extracted parquet files into a single flatfile suitable for
 UK address matching. This includes:
-- Processing core feature types (Built Address, Pre-Build Address, etc.)
+- Processing core feature types (Built Address, Historic Address, etc.)
 - Processing alternate address records
 - Processing Royal Mail addresses
 - Handling Welsh language variants
@@ -19,6 +19,10 @@ import duckdb
 
 from ukam_os_builder._exceptions import ToFlatfileError
 from ukam_os_builder.api.settings import Settings, create_duckdb_connection
+from ukam_os_builder.data_sources.ngd.ngd_exclusions import (
+    get_configured_ngd_excluded_stems,
+    ngd_file_matches_excluded_stem,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -27,6 +31,8 @@ logger = logging.getLogger(__name__)
 FEATURE_TYPE_BY_STEM = {
     "add_gb_builtaddress": "Built Address",
     "add_gb_builtaddress_altadd": "Built Address",
+    "add_gb_historicaddress": "Historic Address",
+    "add_gb_historicaddress_altadd": "Historic Address",
     "add_gb_nonaddressableobject": "Non-Addressable Object",
     "add_gb_nonaddressableobject_altadd": "Non-Addressable Object",
     "add_gb_prebuildaddress": "Pre-Build Address",
@@ -37,6 +43,7 @@ FEATURE_TYPE_BY_STEM = {
 # Core feature stems (contain fulladdress and classification fields)
 CORE_FEATURE_STEMS = {
     "add_gb_builtaddress",
+    "add_gb_historicaddress",
     "add_gb_nonaddressableobject",
     "add_gb_prebuildaddress",
 }
@@ -44,6 +51,7 @@ CORE_FEATURE_STEMS = {
 # Alternate address stems (no classification fields)
 ALTADD_STEMS = {
     "add_gb_builtaddress_altadd",
+    "add_gb_historicaddress_altadd",
     "add_gb_nonaddressableobject_altadd",
     "add_gb_prebuildaddress_altadd",
 }
@@ -53,6 +61,7 @@ CORE_FEATURE_PRIORITY = {
     "add_gb_builtaddress": 1,
     "add_gb_prebuildaddress": 2,
     "add_gb_nonaddressableobject": 3,
+    "add_gb_historicaddress": 4,
 }
 
 
@@ -66,7 +75,7 @@ def _create_metadata_lookup_view(
     This view is used to enrich Royal Mail and alternate address records
     with metadata (classificationcode, parentuprn, etc.) by UPRN lookup.
 
-    Uses priority ranking (Built > Pre-Build > Non-Addressable)
+    Uses priority ranking (Built > Pre-Build > Non-Addressable > Historic)
     to dedupe when a UPRN exists in multiple core files.
 
     Args:
@@ -143,6 +152,17 @@ def _create_metadata_lookup_view(
         con.execute(sql)
 
     built_path = parquet_dir / "add_gb_builtaddress.parquet"
+    if not built_path.exists():
+        logger.warning("Built Address file not found. LTLA lookup will be empty.")
+        con.execute("""
+            CREATE OR REPLACE TEMP VIEW builtaddress_ltla_lookup AS
+            SELECT
+                CAST(NULL AS BIGINT) AS uprn,
+                CAST(NULL AS VARCHAR) AS lowertierlocalauthoritygsscode
+            WHERE 1=0
+        """)
+        return
+
     built_sql = f"""
         CREATE OR REPLACE TEMP VIEW builtaddress_ltla_lookup AS
         SELECT
@@ -161,7 +181,7 @@ def _create_core_feature_view(
     parquet_path: Path,
     uprn_predicate: str | None = None,
 ) -> None:
-    """Create view for core feature types (Built, Pre-Build, Non-Addressable).
+    """Create view for core feature types (Built, Historic, Pre-Build, Non-Addressable).
 
     These tables have fulladdress, classification fields, and Welsh language columns.
     Produces both English and Welsh (where available) address records.
@@ -512,7 +532,7 @@ def _create_dedup_view(con: duckdb.DuckDBPyConnection) -> None:
     """Create deduplicated view of all addresses.
 
     Priority rules for deduplication:
-    - Feature type: Built Address -> Pre-Build -> Royal Mail -> Non-Addressable
+    - Feature type: Built Address -> Pre-Build -> Royal Mail -> Historic -> Non-Addressable
     - Address status: Approved -> Provisional -> Alternative -> Historical
     - Build status: Built Complete -> Under Construction -> Prebuild -> Historic -> Demolished
 
@@ -528,6 +548,7 @@ def _create_dedup_view(con: duckdb.DuckDBPyConnection) -> None:
               WHEN 'Built Address' THEN 1
               WHEN 'Pre-Build Address' THEN 2
               WHEN 'Royal Mail Address' THEN 3
+              WHEN 'Historic Address' THEN 4
               WHEN 'Non-Addressable Object' THEN 5
               WHEN 'Custom Level' THEN 6
               ELSE 9
@@ -648,6 +669,19 @@ def run_flatfile_step(settings: Settings, force: bool = False) -> list[Path]:
         )
 
     parquet_files = list(parquet_dir.glob("*.parquet"))
+    ngd_excluded_stems = get_configured_ngd_excluded_stems(settings)
+    if ngd_excluded_stems:
+        original_count = len(parquet_files)
+        parquet_files = [
+            path
+            for path in parquet_files
+            if not ngd_file_matches_excluded_stem(path.name, ngd_excluded_stems)
+        ]
+        if len(parquet_files) != original_count:
+            logger.info(
+                "Skipped %d excluded NGD parquet file(s)",
+                original_count - len(parquet_files),
+            )
     if not parquet_files:
         raise ToFlatfileError(f"No parquet files found in {parquet_dir}. Run --step extract first.")
 
