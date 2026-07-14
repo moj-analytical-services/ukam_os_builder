@@ -232,6 +232,7 @@ Each file contains:
 | `postal_address_code` | Postal address indicator |
 | `udprn` | Royal Mail delivery point reference |
 | `parent_uprn` | Parent UPRN for hierarchical addresses |
+| `local_custodian_code` | [Local Authority custodian code](https://docs.os.uk/os-downloads/products/addresses-and-names-portfolio/addressbase-fundamentals/addressbase-local-custodian-codes) identifying the authority responsible for maintaining the address record |
 | `hierarchy_level` | C = Child, P = Parent, S = Singleton |
 | `source` | Data source (LPI, ORGANISATION, DELIVERY_POINT, CUSTOM_LEVEL) |
 | `variant_label` | Address variant type |
