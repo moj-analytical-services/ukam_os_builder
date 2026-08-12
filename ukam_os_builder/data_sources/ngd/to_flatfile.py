@@ -23,6 +23,7 @@ from ukam_os_builder.data_sources.ngd.ngd_exclusions import (
     get_configured_ngd_excluded_stems,
     ngd_file_matches_excluded_stem,
 )
+from ukam_os_builder.os_builder.extract import _sql_string
 
 logger = logging.getLogger(__name__)
 
@@ -797,10 +798,20 @@ def run_flatfile_step(settings: Settings, force: bool = False) -> list[Path]:
         if output_path.exists():
             output_path.unlink()
 
+        order_clause = (
+            "ORDER BY postcode, unique_id" if settings.processing.sort_output_by_postcode else ""
+        )
+        compression = _sql_string(settings.processing.parquet_compression)
+        compression_level = settings.processing.parquet_compression_level
         con.execute(f"""
             COPY (
                 SELECT * FROM all_full_addresses_dedup
-            ) TO '{output_path.as_posix()}' (FORMAT 'PARQUET');
+                {order_clause}
+            ) TO '{output_path.as_posix()}' (
+                FORMAT 'PARQUET',
+                COMPRESSION '{compression}',
+                COMPRESSION_LEVEL {compression_level}
+            );
         """)
 
         return output_path, chunk_count
