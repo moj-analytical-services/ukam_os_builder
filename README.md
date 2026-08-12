@@ -186,7 +186,7 @@ Final outputs are parquet files in `paths.output_dir`:
 - Single chunk: `ngd_for_uk_address_matcher.chunk_001_of_001.parquet`
 - Multi-chunk: `ngd_for_uk_address_matcher.chunk_001_of_00N.parquet`, `...chunk_00N_of_00N.parquet`
 
-Chunking reduces memory use by processing UPRNs in batches. The union of all chunk files equals the single-chunk output. Use a higher `num_chunks` (for example `10`) for laptops with limited RAM.
+Chunking reduces memory use by processing UPRNs in batches. The default is `num_chunks: 10`, and the union of all chunk files equals the single-chunk output. Increase `num_chunks` for very large canonical files or machines with limited RAM; set it to `1` only when a single output file is explicitly required.
 
 ## Schemas
 
@@ -200,7 +200,7 @@ Final outputs are parquet files in `paths.output_dir`:
 - Single chunk: `ngd_for_uk_address_matcher.chunk_001_of_001.parquet`
 - Multi-chunk: `ngd_for_uk_address_matcher.chunk_001_of_00N.parquet`, `...chunk_00N_of_00N.parquet`
 
-Chunking reduces memory use by processing UPRNs in batches. The union of all chunk files equals the single-chunk output. Use a higher `num_chunks` (for example `10`) for laptops with limited RAM.
+Chunking reduces memory use by processing UPRNs in batches. The default is `num_chunks: 10`, and the union of all chunk files equals the single-chunk output. Increase `num_chunks` for very large canonical files or machines with limited RAM; set it to `1` only when a single output file is explicitly required.
 
 Each file contains:
 
@@ -229,7 +229,7 @@ The final output is written to `paths.output_dir` as one or more parquet files:
 - Single chunk mode (`num_chunks: 1`): `abp_for_uk_address_matcher.chunk_001_of_001.parquet`
 - Multi-chunk mode (`num_chunks: N`): `abp_for_uk_address_matcher.chunk_001_of_00N.parquet`, `chunk_002_of_00N.parquet`, and so on
 
-Chunking reduces memory usage by processing UPRNs in batches. The union of all chunk files equals the single-chunk output. Use a higher `num_chunks` (for example `10`) for laptops with limited RAM.
+Chunking reduces memory usage by processing UPRNs in batches. The default is `num_chunks: 10`, and the union of all chunk files equals the single-chunk output. Increase `num_chunks` for very large canonical files or machines with limited RAM; set it to `1` only when a single output file is explicitly required.
 
 Each file contains:
 
@@ -264,14 +264,14 @@ The pipeline processes these NGD address feature types:
 
 Welsh language variants are extracted where available and appear as separate rows in the output.
 
-By default, NGD Historic Address and ABP Historic LPI records are excluded. 
-Ordnance Survey experts advised that historic addresses can make address matching worse, 
-because many records are not comprehensive old-business history; they can include planning, 
-placeholder, or later replaced address variants that incorrectly match current addresses. 
+By default, NGD Historic Address and ABP Historic LPI records are excluded.
+Ordnance Survey experts advised that historic addresses can make address matching worse,
+because many records are not comprehensive old-business history; they can include planning,
+placeholder, or later replaced address variants that incorrectly match current addresses.
 Labelled data checks also showed historic records causing incorrect matches. Historic
-records may still improve some use cases, but they should be used carefully because adding 
-them can fix some matches while degrading others. 
-For use cases that need older business or address history, old cuts of NGD BuiltAddress or 
+records may still improve some use cases, but they should be used carefully because adding
+them can fix some matches while degrading others.
+For use cases that need older business or address history, old cuts of NGD BuiltAddress or
 AddressBase may be more appropriate.
 
 To change NGD feature exclusions, set `processing.ngd_excluded_stems` in
@@ -279,12 +279,12 @@ To change NGD feature exclusions, set `processing.ngd_excluded_stems` in
 Valid values are `builtaddress`, `prebuildaddress`, `historicaddress`,
 `nonaddressableobject`, and `royalmailaddress`. When a feature stem is excluded, its
 matching alternate-address file is excluded too; for example, `builtaddress` excludes
-both `add_gb_builtaddress` and `add_gb_builtaddress_altadd`. 
+both `add_gb_builtaddress` and `add_gb_builtaddress_altadd`.
 To include NGD historic addresses, set `ngd_excluded_stems: []`.
 
-To change ABP status exclusions, set `processing.abp_excluded_logical_statuses` 
+To change ABP status exclusions, set `processing.abp_excluded_logical_statuses`
 or pass `--abp-excluded-logical-statuses`.
-Valid values are `1` (approved), `3` (alternative), `6` (provisional), and `8` (historic). 
+Valid values are `1` (approved), `3` (alternative), `6` (provisional), and `8` (historic).
 To include ABP historical records, set `abp_excluded_logical_statuses: []`.
 
 ## Deduplication
@@ -356,13 +356,16 @@ os_downloads:
 processing:
   parquet_compression: zstd
   parquet_compression_level: 9
-  num_chunks: 20
+  num_chunks: 10
+  sort_output_by_postcode: false
   ngd_excluded_stems:
     - historicaddress
   abp_excluded_logical_statuses:
     - 8
   # duckdb_memory_limit: "8GB"
 ```
+
+`parquet_compression` and `parquet_compression_level` apply to intermediate and final Parquet files. Set `sort_output_by_postcode: true` to sort each final NGD chunk by postcode and `unique_id`; this can reduce file size but requires additional sorting work.
 
 By default, the tool creates these directories under `paths.work_dir`:
 
