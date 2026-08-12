@@ -194,7 +194,7 @@ def test_load_settings_defaults_source_and_num_chunks(
 
     assert settings.source.type == "ngd"
     assert settings.processing.num_chunks == 10
-    assert settings.processing.sort_output_by_postcode is False
+    assert settings.processing.sort_output_by_postcode is True
     assert settings.processing.ngd_excluded_stems == ["historicaddress"]
     assert settings.processing.abp_excluded_logical_statuses == [8]
 

@@ -85,7 +85,7 @@ class ProcessingSettings(StrictBaseModel):
 
     parquet_compression: str = "zstd"
     parquet_compression_level: int = 9
-    sort_output_by_postcode: bool = False
+    sort_output_by_postcode: bool = True
     duckdb_memory_limit: str | None = None
     num_chunks: int = 10
     ngd_excluded_stems: list[str] = Field(default_factory=lambda: list(DEFAULT_NGD_EXCLUDED_STEMS))

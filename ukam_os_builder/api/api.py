@@ -45,7 +45,7 @@ def _default_config() -> dict[str, object]:
         "processing": {
             "parquet_compression": "zstd",
             "parquet_compression_level": 9,
-            "sort_output_by_postcode": False,
+            "sort_output_by_postcode": True,
             "num_chunks": 10,
             "ngd_excluded_stems": list(DEFAULT_NGD_EXCLUDED_STEMS),
             "abp_excluded_logical_statuses": list(DEFAULT_ABP_EXCLUDED_LOGICAL_STATUSES),
