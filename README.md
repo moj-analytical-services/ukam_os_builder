@@ -161,11 +161,23 @@ ukam-os-build --config config.yaml
 ## Pipeline stages
 
 1. `download` - fetch package metadata and zip files from OS Data Hub.
-2. `extract` - extract CSVs from downloaded zip files and convert to parquet.
+2. `extract` - convert NGD CSV members directly from downloaded zip files to parquet; ABP archives are extracted to CSV for the split step.
 3. `split` - ABP only: split raw records and write only parquet staging files used by flatfile generation (`street_descriptor`, `blpu`, `lpi`, `delivery_point`, `organisation`, `classification`).
 4. `flatfile` - transform and deduplicate into final output parquet file(s).
 
 All stages are idempotent. Use `--overwrite` to regenerate outputs (`--force` is accepted as a backward-compatible alias).
+
+### ZIP extraction behavior
+
+For NGD, the `extract` stage registers each downloaded ZIP with `fsspec` and DuckDB reads eligible CSV members from the archive while writing Parquet outputs. The decompressed CSV members are not persisted in `paths.extracted_dir`. Parquet files are written through temporary files and renamed into place after a successful conversion.
+
+If the ZIP filesystem cannot be opened, registered, or read, the stage falls back to the legacy CSV extraction path. CSV parsing, type inference, conversion, and output-write errors are reported directly and do not trigger that fallback. Existing downloaded ZIPs can therefore be processed offline with:
+
+```bash
+ukam-os-build --config config.yaml --step extract
+```
+
+ABP continues to materialise CSV files because its `split` stage consumes raw CSV records.
 
 ## Output
 
