@@ -193,7 +193,8 @@ def test_load_settings_defaults_source_and_num_chunks(
     settings = load_settings(config_path, load_env=False)
 
     assert settings.source.type == "ngd"
-    assert settings.processing.num_chunks == 20
+    assert settings.processing.num_chunks == 10
+    assert settings.processing.sort_output_by_postcode is False
     assert settings.processing.ngd_excluded_stems == ["historicaddress"]
     assert settings.processing.abp_excluded_logical_statuses == [8]
 

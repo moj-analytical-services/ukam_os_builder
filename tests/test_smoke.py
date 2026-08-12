@@ -152,6 +152,7 @@ def test_flatfile_single_chunk(temp_settings: Settings) -> None:
     """Test flatfile generation with single chunk output."""
     # Prepare test data
     _prepare_test_parquet(temp_settings)
+    temp_settings.processing.sort_output_by_postcode = True
 
     # Run flatfile step
     output_files = run_flatfile_step(temp_settings, force=True)
@@ -167,6 +168,20 @@ def test_flatfile_single_chunk(temp_settings: Settings) -> None:
         SELECT COUNT(*) as cnt FROM read_parquet('{output_files[0].as_posix()}')
     """).fetchone()
     assert result[0] > 0, "Output should contain records"
+
+    compression = con.execute(
+        "SELECT DISTINCT compression FROM parquet_metadata(?)",
+        [output_files[0].as_posix()],
+    ).fetchall()
+    assert compression == [("ZSTD",)]
+
+    ordered_rows = con.execute(f"""
+        SELECT postcode, unique_id FROM read_parquet('{output_files[0].as_posix()}')
+    """).fetchall()
+    assert ordered_rows == sorted(
+        ordered_rows,
+        key=lambda row: (row[0] is None, row[0] or "", row[1]),
+    )
 
     # Check columns exist
     schema = con.execute(f"""
@@ -191,9 +206,7 @@ def test_flatfile_single_chunk(temp_settings: Settings) -> None:
         SELECT COUNT(*) FROM read_parquet('{output_files[0].as_posix()}')
         WHERE filename = 'add_gb_historicaddress.parquet'
     """).fetchone()[0]
-    assert (
-        historic_count > 0
-    ), "Historic Address records should be processed when included"
+    assert historic_count > 0, "Historic Address records should be processed when included"
 
     con.close()
 
