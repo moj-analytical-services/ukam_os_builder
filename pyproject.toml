@@ -15,6 +15,7 @@ classifiers = [
 ]
 dependencies = [
     "duckdb>=1.0.0",
+    "fsspec>=2023.10.0",
     "pydantic>=2.0.0",
     "python-dotenv>=1.0.0",
     "pyyaml>=6.0.0",
