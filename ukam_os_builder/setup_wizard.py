@@ -168,7 +168,7 @@ def main(argv: list[str] | None = None) -> int:
         if _confirm("Configure advanced processing settings?", default_yes=False):
             config["processing"]["num_chunks"] = _prompt_int(
                 "num_chunks",
-                int(config["processing"].get("num_chunks", 1)),
+                int(config["processing"].get("num_chunks", 10)),
             )
             config["processing"]["parquet_compression"] = _prompt_non_empty(
                 "parquet_compression",

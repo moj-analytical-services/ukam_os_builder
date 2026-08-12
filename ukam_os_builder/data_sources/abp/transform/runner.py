@@ -6,7 +6,7 @@ CHUNKING CONTRACT
 This module implements transparent UPRN-based chunking for memory efficiency.
 
 Behaviour:
-- User sets `processing.num_chunks` in config.yaml (default: 1).
+- User sets `processing.num_chunks` in config.yaml (default: 10).
 - Flatfile step produces N parquet files (one per chunk).
 - Chunk assignment: `uprn IS NOT NULL AND (hash(uprn) % num_chunks) = chunk_id`
 

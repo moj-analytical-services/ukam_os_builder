@@ -27,6 +27,7 @@ logger = logging.getLogger(__name__)
 
 SourceType = Literal["ngd", "abp"]
 
+
 def _default_config() -> dict[str, object]:
     """Return fresh default config values."""
     return {
@@ -44,11 +45,10 @@ def _default_config() -> dict[str, object]:
         "processing": {
             "parquet_compression": "zstd",
             "parquet_compression_level": 9,
-            "num_chunks": 20,
+            "sort_output_by_postcode": False,
+            "num_chunks": 10,
             "ngd_excluded_stems": list(DEFAULT_NGD_EXCLUDED_STEMS),
-            "abp_excluded_logical_statuses": list(
-                DEFAULT_ABP_EXCLUDED_LOGICAL_STATUSES
-            ),
+            "abp_excluded_logical_statuses": list(DEFAULT_ABP_EXCLUDED_LOGICAL_STATUSES),
         },
     }
 
@@ -124,13 +124,15 @@ def render_annotated_config(config: dict[str, object]) -> str:
         "  # Parquet compression codec for intermediate/final files\n"
         f"  parquet_compression: {processing['parquet_compression']}\n"
         "  # Compression level (higher usually means smaller files but slower writes)\n"
-        f"  parquet_compression_level: {processing['parquet_compression_level']}\n\n"
+        f"  parquet_compression_level: {processing['parquet_compression_level']}\n"
+        "  # Sort each output chunk by postcode and unique_id before writing\n"
+        f"  sort_output_by_postcode: {str(processing['sort_output_by_postcode']).lower()}\n\n"
         "  # DuckDB memory limit (optional)\n"
         "  # If set, limits how much RAM DuckDB can use (e.g., '4GB', '500MB')\n"
         "  # If not set, DuckDB uses its default memory strategy\n"
         f"{duckdb_memory_limit_line}\n"
-        "  # Number of chunks to split flatfile processing into (default: 1)\n"
-        "  # Use higher values (e.g., 10-20) for lower memory usage\n"
+        "  # Number of chunks to split flatfile processing into (default: 10)\n"
+        "  # Use higher values for very large canonical files or lower memory usage\n"
         f"  num_chunks: {processing['num_chunks']}\n\n"
         "  # NGD feature stems to exclude from pipeline processing\n"
         "  # (Historic addresses are excluded by default)\n"
@@ -271,12 +273,10 @@ def create_config_and_env(
     if processing:
         config["processing"] = {**config["processing"], **processing}
     if ngd_excluded_stems is not None:
-        config["processing"]["ngd_excluded_stems"] = parse_ngd_excluded_stems(
-            ngd_excluded_stems
-        )
+        config["processing"]["ngd_excluded_stems"] = parse_ngd_excluded_stems(ngd_excluded_stems)
     if abp_excluded_logical_statuses is not None:
-        config["processing"]["abp_excluded_logical_statuses"] = (
-            parse_abp_excluded_logical_statuses(abp_excluded_logical_statuses)
+        config["processing"]["abp_excluded_logical_statuses"] = parse_abp_excluded_logical_statuses(
+            abp_excluded_logical_statuses
         )
 
     return write_config_and_env(
@@ -346,13 +346,11 @@ def apply_run_overrides(
         settings.processing.parquet_compression_level = parquet_compression_level
 
     if ngd_excluded_stems is not None:
-        settings.processing.ngd_excluded_stems = parse_ngd_excluded_stems(
-            ngd_excluded_stems
-        )
+        settings.processing.ngd_excluded_stems = parse_ngd_excluded_stems(ngd_excluded_stems)
 
     if abp_excluded_logical_statuses is not None:
-        settings.processing.abp_excluded_logical_statuses = (
-            parse_abp_excluded_logical_statuses(abp_excluded_logical_statuses)
+        settings.processing.abp_excluded_logical_statuses = parse_abp_excluded_logical_statuses(
+            abp_excluded_logical_statuses
         )
 
 

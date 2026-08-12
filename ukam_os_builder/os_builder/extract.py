@@ -33,6 +33,7 @@ class _ZipCsvMember:
     uri: str
     output_path: Path
 
+
 def find_downloaded_zips(downloads_dir: Path) -> list[Path]:
     """Find all downloaded zip files in a directory."""
     if not downloads_dir.exists():
@@ -382,8 +383,7 @@ def _convert_zip_to_parquet_with_fallback(
         return _convert_zip_to_parquet_direct(zip_path, members, settings, force)
     except ZipStreamError as exc:
         logger.warning(
-            "Direct ZIP-to-Parquet conversion failed for %s: %s; "
-            "falling back to CSV extraction",
+            "Direct ZIP-to-Parquet conversion failed for %s: %s; falling back to CSV extraction",
             zip_path.name,
             exc,
         )
