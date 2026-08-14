@@ -506,6 +506,18 @@ def _create_custom_level_rows(con: duckdb.DuckDBPyConnection) -> None:
                 END AS level_word
             FROM level_parsed
             WHERE level_int BETWEEN -1 AND 6
+              AND NOT COALESCE(
+                  level_int = 0
+                  AND classificationcode IN (
+                      'RD01', -- Caravan
+                      'RD02', -- Detached
+                      'RD03', -- Semi-detached
+                      'RD04', -- Terraced
+                      'RD07', -- House boat
+                      'RD10'  -- Privately owned holiday caravan/chalet
+                  ),
+                  FALSE
+              )
         )
         SELECT
             uprn,
