@@ -148,5 +148,10 @@ def render_custom_levels(con: duckdb.DuckDBPyConnection) -> None:
             'CUSTOM_LEVEL' AS variant_label,
             FALSE AS is_primary
         FROM level_words
-        WHERE level_word IS NOT NULL
+                WHERE level_word IS NOT NULL
+                    AND NOT regexp_matches(
+                            base_address,
+                            '(^|[^A-Z0-9])' || level_word || '([^A-Z0-9]|$)',
+                            'i'
+                    )
     """)

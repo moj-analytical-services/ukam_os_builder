@@ -536,7 +536,12 @@ def _create_custom_level_rows(con: duckdb.DuckDBPyConnection) -> None:
             address_status,
             build_status
         FROM level_words
-        WHERE level_word IS NOT NULL;
+                WHERE level_word IS NOT NULL
+                    AND NOT regexp_matches(
+                            address_concat,
+                            '(^|[^A-Z0-9])' || level_word || '([^A-Z0-9]|$)',
+                            'i'
+                    );
     """
     con.execute(sql)
 
