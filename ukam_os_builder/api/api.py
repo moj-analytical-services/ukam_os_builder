@@ -5,6 +5,7 @@ import os
 from pathlib import Path
 from typing import Any, Literal
 
+import duckdb
 import requests
 import yaml
 
@@ -19,7 +20,7 @@ from ukam_os_builder.data_sources.ngd.ngd_exclusions import (
     format_valid_ngd_excluded_stems,
     parse_ngd_excluded_stems,
 )
-from ukam_os_builder.os_builder.os_hub import _get_manifest_path, get_package_version
+from ukam_os_builder.os_builder.os_hub import _get_manifest_path, format_size, get_package_version
 from ukam_os_builder.pipeline import run as run_pipeline
 from ukam_os_builder.pipeline import supported_steps_for_source
 
@@ -54,6 +55,56 @@ def _default_config() -> dict[str, object]:
 
 
 DEFAULT_CONFIG: dict[str, object] = _default_config()
+
+
+def _collect_output_metadata(output_dir: Path) -> tuple[int, int, int]:
+    """Return final Parquet file count, record count, and total size in bytes."""
+    output_files = sorted(output_dir.glob("*.parquet")) if output_dir.exists() else []
+    total_size = sum(path.stat().st_size for path in output_files)
+    if not output_files:
+        return 0, 0, 0
+
+    total_records = 0
+    con = duckdb.connect()
+    try:
+        for output_file in output_files:
+            result = con.execute(
+                """
+                SELECT COALESCE(SUM(row_group_num_rows), 0)
+                FROM (
+                    SELECT DISTINCT row_group_id, row_group_num_rows
+                    FROM parquet_metadata(?)
+                )
+                """,
+                [str(output_file)],
+            ).fetchone()
+            total_records += int(result[0] if result else 0)
+    finally:
+        con.close()
+
+    return len(output_files), total_records, total_size
+
+
+def _format_output_metadata(output_dir: Path, source: SourceType) -> str:
+    """Format useful metadata for final address-matcher outputs."""
+    file_count, record_count, total_size = _collect_output_metadata(output_dir)
+    file_pattern = f"{source}_for_uk_address_matcher.chunk_**.parquet"
+    if file_count == 0:
+        return (
+            "Output metadata:\n"
+            f"  • File(s): {file_pattern}\n"
+            "  • Chunks: none found\n"
+            "  • total records: 0\n"
+            "  • total size on disk: 0 B"
+        )
+
+    return (
+        "Output metadata:\n"
+        f"  • File(s): {file_pattern}\n"
+        f"  • Chunks: {file_count}\n"
+        f"  • total records: {record_count:,}\n"
+        f"  • total size on disk: {format_size(total_size)} ({total_size:,} bytes)"
+    )
 
 
 def _render_yaml_list(key: str, values: list[object], *, indent: int = 2) -> str:
@@ -438,11 +489,20 @@ def run_from_config(
     overwrite_effective = overwrite if overwrite is not None else bool(force)
     run_pipeline(step=step, settings=settings, force=overwrite_effective, list_only=list_only)
 
-    logger.info(
+    completion_message = (
         "✅ Pipeline run completed\n\n"
         "Where you need to look:\n"
         "  • downloads_dir (raw OS Hub extracts): %s%s\n"
-        "  • output_dir (final files for address matcher): %s%s\n",
+        "  • output_dir (final files for address matcher): %s%s"
+    )
+    if step in {"all", "flatfile"}:
+        completion_message += "\n\n" + _format_output_metadata(
+            settings.paths.output_dir,
+            source_type,
+        )
+
+    logger.info(
+        completion_message,
         str(settings.paths.downloads_dir),
         "",
         str(settings.paths.output_dir),
