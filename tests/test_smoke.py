@@ -148,6 +148,24 @@ def test_duckdb_connection(temp_settings: Settings) -> None:
     con.close()
 
 
+def test_duckdb_memory_limit_is_logged_once(
+    temp_settings: Settings,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Test that repeated configured connections do not repeat the memory log."""
+    temp_settings.processing.duckdb_memory_limit = "16GB"
+    caplog.clear()
+
+    with caplog.at_level("INFO", logger="ukam_os_builder.api.settings"):
+        connections = [create_duckdb_connection(temp_settings) for _ in range(2)]
+
+    for connection in connections:
+        connection.close()
+
+    messages = [record.getMessage() for record in caplog.records]
+    assert messages.count("Set DuckDB memory limit to 16GB") == 1
+
+
 def test_flatfile_single_chunk(temp_settings: Settings) -> None:
     """Test flatfile generation with single chunk output."""
     # Prepare test data
