@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import re
 from pathlib import Path
 
 from rich.console import Console
@@ -26,6 +27,19 @@ def _prompt_optional(label: str, default: str = "") -> str | None:
     if value:
         return value
     return default or None
+
+
+def _prompt_memory_limit(label: str, default: str = "") -> str | None:
+    while True:
+        value = _prompt_optional(label, default)
+        if value is None:
+            return None
+        if re.fullmatch(r"\d+(?:\.\d+)?", value):
+            return f"{value}GB"
+        match = re.fullmatch(r"(?P<amount>\d+(?:\.\d+)?)\s*GB", value, re.IGNORECASE)
+        if match:
+            return f"{match.group('amount')}GB"
+        console.print("[red]Enter a memory limit in GB, e.g. 8GB.[/red]")
 
 
 def _prompt_int(label: str, default: int) -> int:
@@ -178,7 +192,7 @@ def main(argv: list[str] | None = None) -> int:
                 "parquet_compression_level",
                 int(config["processing"].get("parquet_compression_level", 9)),
             )
-            memory_limit = _prompt_optional(
+            memory_limit = _prompt_memory_limit(
                 "duckdb_memory_limit (optional, e.g. 8GB)",
                 str(config["processing"].get("duckdb_memory_limit", "")),
             )

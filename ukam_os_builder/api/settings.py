@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import os
+from functools import cache
 from pathlib import Path
 from typing import Any, Literal
 
@@ -20,6 +21,11 @@ from ukam_os_builder.data_sources.ngd.ngd_exclusions import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+@cache
+def _log_duckdb_memory_limit(memory_limit: str) -> None:
+    logger.info("Set DuckDB memory limit to %s", memory_limit)
 
 
 class StrictBaseModel(BaseModel):
@@ -296,6 +302,6 @@ def create_duckdb_connection(settings: Settings) -> duckdb.DuckDBPyConnection:
     # Apply memory limit if configured
     if settings.processing.duckdb_memory_limit:
         con.execute(f"SET memory_limit = '{settings.processing.duckdb_memory_limit}'")
-        logger.info("Set DuckDB memory limit to %s", settings.processing.duckdb_memory_limit)
+        _log_duckdb_memory_limit(settings.processing.duckdb_memory_limit)
 
     return con

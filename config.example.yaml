@@ -52,7 +52,7 @@ processing:
     - historicaddress
 
   # ABP LPI logical statuses to exclude from flatfile processing
-  # Logical status 8 is excluded by default 
+  # Logical status 8 is excluded by default
   # Valid values: 1 (approved), 3 (alternative), 6 (provisional), 8 (historic)
   abp_excluded_logical_statuses:
     - 8
