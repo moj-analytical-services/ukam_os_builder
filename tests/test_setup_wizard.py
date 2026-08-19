@@ -97,6 +97,43 @@ def test_setup_wizard_skips_env_update_when_user_declines(
     assert captured["api_secret"] is None
 
 
+def test_setup_wizard_normalises_bare_memory_limit(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    config_path = tmp_path / "config.yaml"
+    env_path = tmp_path / ".env"
+
+    monkeypatch.setattr(
+        setup_wizard.console,
+        "input",
+        _input_feeder(["", "pkg-1", "ver-1", "", "y", "", "", "", "16", "n"]),
+    )
+
+    captured: dict[str, object] = {}
+
+    def fake_write_config_and_env(**kwargs):
+        captured.update(kwargs)
+        return Path(kwargs["config_out"]).resolve(), Path(kwargs["env_out"]).resolve(), False
+
+    monkeypatch.setattr(setup_wizard, "write_config_and_env", fake_write_config_and_env)
+
+    exit_code = setup_wizard.main(["--config-out", str(config_path), "--env-out", str(env_path)])
+
+    assert exit_code == 0
+    config = captured["config"]
+    assert isinstance(config, dict)
+    assert config["processing"]["duckdb_memory_limit"] == "16GB"
+
+
+def test_setup_wizard_accepts_only_gigabyte_memory_limits(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(setup_wizard.console, "input", _input_feeder(["16MB", "16GB"]))
+
+    assert setup_wizard._prompt_memory_limit("memory limit") == "16GB"
+
+
 def test_setup_wizard_decline_overwrite_keeps_existing_env(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
