@@ -63,7 +63,12 @@ def test_ngd_converts_zip_members_without_extracting_csv(tmp_path: Path) -> None
         {
             "nested/add_gb_builtaddress.csv": "uprn,fulladdress\n1,One Street\n2,Two Street\n",
             "nested/add_gb_builtaddress_altadd.csv": "uprn,fulladdress\n3,Three Street\n",
+            "nested/add_gb_builtaddress_rltenty.csv": "uprn,related\n1,99\n",
         },
+    )
+    _write_zip(
+        settings.paths.downloads_dir / "add_gb_streetaddress.zip",
+        {"add_gb_streetaddress.csv": "streetid,name\n1,One Street\n"},
     )
 
     outputs = extract.run_extract_step(settings, force=True)
@@ -74,6 +79,20 @@ def test_ngd_converts_zip_members_without_extracting_csv(tmp_path: Path) -> None
     ]
     assert [_count_rows(path) for path in outputs] == [2, 1]
     assert not list(settings.paths.extracted_dir.rglob("*.csv"))
+
+
+def test_ngd_raw_csv_extraction_keeps_side_members(tmp_path: Path) -> None:
+    settings = _settings(tmp_path)
+    members = {
+        "add_gb_builtaddress.csv": "uprn,fulladdress\n1,One Street\n",
+        "add_gb_builtaddress_rltenty.csv": "uprn,related\n1,99\n",
+    }
+    _write_zip(settings.paths.downloads_dir / "add_gb_builtaddress.zip", members)
+
+    outputs = extract.run_extract_step(settings, force=True, convert_to_parquet=False)
+
+    assert {path.name for path in outputs} == set(members)
+    assert all(path.read_text() == members[path.name] for path in outputs)
 
 
 def test_ngd_zip_member_exclusions_are_applied_before_conversion(tmp_path: Path) -> None:

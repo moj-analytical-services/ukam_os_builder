@@ -73,9 +73,12 @@ def _should_convert_csv_to_parquet(
     ngd_excluded_stems: list[str] | None = None,
 ) -> bool:
     if source.lower() == "ngd":
-        return is_ngd_address_file(csv_path.name) and not ngd_file_matches_excluded_stem(
-            csv_path.name,
-            ngd_excluded_stems,
+        # Import at call time: the NGD consumer also uses this module's SQL helper.
+        from ukam_os_builder.data_sources.ngd.to_flatfile import FEATURE_TYPE_BY_STEM
+
+        return (
+            csv_path.stem.lower() in FEATURE_TYPE_BY_STEM
+            and not ngd_file_matches_excluded_stem(csv_path.name, ngd_excluded_stems)
         )
     return True
 
@@ -484,6 +487,16 @@ def run_extract_step(
                 ngd_excluded_stems,
             )
             if not members:
+                with zipfile.ZipFile(zip_path) as archive:
+                    address_csvs = any(
+                        name.lower().endswith(".csv") and is_ngd_address_file(name)
+                        for name in archive.namelist()
+                    )
+                if address_csvs:
+                    logger.info(
+                        "Skipping archive with no canonical address members: %s", zip_path.name
+                    )
+                    continue
                 raise ValueError(f"No eligible CSV members found in {zip_path}")
 
             for member in members:
