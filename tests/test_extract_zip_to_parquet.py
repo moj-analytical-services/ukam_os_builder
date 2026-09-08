@@ -218,3 +218,41 @@ def test_ngd_rejects_duplicate_outputs_across_archives(tmp_path: Path) -> None:
 
     assert not list(settings.paths.extracted_dir.rglob("*.parquet"))
     assert not list(settings.paths.extracted_dir.rglob("*.csv"))
+
+
+def test_large_zip_csv_is_exact_with_multiple_writer_threads(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    settings = _settings(tmp_path)
+    csv_path = tmp_path / "source.csv"
+    expected_sql = (
+        "SELECT i AS uprn, repeat('ADDRESS ', 20) || i::VARCHAR AS fulladdress "
+        "FROM range(150000) AS t(i)"
+    )
+    with duckdb.connect() as con:
+        con.execute(f"COPY ({expected_sql}) TO '{csv_path}' (HEADER)")
+    with zipfile.ZipFile(
+        settings.paths.downloads_dir / "add_gb_builtaddress.zip", "w", zipfile.ZIP_DEFLATED
+    ) as archive:
+        archive.write(csv_path, "add_gb_builtaddress.csv")
+
+    original_connect = extract.create_duckdb_connection
+
+    def parallel_connection(settings: Settings) -> duckdb.DuckDBPyConnection:
+        con = original_connect(settings)
+        con.execute("SET threads=8")
+        return con
+
+    monkeypatch.setattr(extract, "create_duckdb_connection", parallel_connection)
+    [output] = extract.run_extract_step(settings)
+    with duckdb.connect() as con:
+        actual = con.read_parquet(str(output))
+        assert actual.columns == ["uprn", "fulladdress"]
+        assert [str(t) for t in actual.types] == ["BIGINT", "VARCHAR"]
+        actual.create_view("actual")
+        con.sql(expected_sql).create_view("expected")
+        assert con.execute(
+            "SELECT count(*) FROM ((FROM actual EXCEPT ALL FROM expected) "
+            "UNION ALL (FROM expected EXCEPT ALL FROM actual))"
+        ).fetchone() == (0,)
+    assert not list(settings.paths.extracted_dir.rglob("*.csv"))

@@ -186,6 +186,9 @@ def _copy_csv_source_to_parquet(
     output_path.parent.mkdir(parents=True, exist_ok=True)
     temporary_path = _temporary_output_path(output_path)
     compression, compression_level = _processing_parquet_options(settings)
+    # ZipExtFile is a sequential decompressor; concurrent CSV reads can corrupt
+    # its shared stream. Keep the Parquet writer and ordinary CSV reads parallel.
+    reader_options = ", parallel=false" if csv_source.startswith("zip://") else ""
 
     logger.debug("Converting %s -> %s", csv_source, output_path.name)
 
@@ -193,7 +196,7 @@ def _copy_csv_source_to_parquet(
         con.execute(
             f"""
             COPY (
-                SELECT * FROM read_csv_auto(?, sample_size=1000000)
+                SELECT * FROM read_csv_auto(?, sample_size=1000000{reader_options})
             ) TO '{_sql_string(temporary_path.as_posix())}' (
                 FORMAT 'PARQUET',
                 COMPRESSION '{_sql_string(compression)}',
