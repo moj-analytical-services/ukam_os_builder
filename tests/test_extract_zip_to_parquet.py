@@ -104,6 +104,83 @@ def test_ngd_skips_archives_containing_only_unused_members(tmp_path: Path, stem:
     assert not list(settings.paths.extracted_dir.rglob("*.csv"))
 
 
+@pytest.mark.parametrize("fallback", [False, True])
+@pytest.mark.parametrize("keep_all", [False, True])
+def test_ngd_projection_preserves_values_and_source_column_order(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fallback: bool, keep_all: bool
+) -> None:
+    settings = _settings(tmp_path)
+    settings.processing.ngd_keep_all_columns = keep_all
+    _write_zip(
+        settings.paths.downloads_dir / "add_gb_builtaddress.zip",
+        {
+            "nested/add_gb_builtaddress.csv": 'FullAddress,Unused,UPRN,Postcode\n"One, Street",drop,1,AB1 2CD\n,drop,2,\n'
+        },
+    )
+    if fallback:
+
+        def fail_filesystem(*args: object, **kwargs: object) -> object:
+            raise OSError("ZIP filesystem unavailable")
+
+        monkeypatch.setattr(extract.fsspec, "filesystem", fail_filesystem)
+
+    [output] = extract.run_extract_step(settings)
+    with duckdb.connect() as con:
+        actual = con.read_parquet(str(output))
+        expected = con.sql("""
+            SELECT * FROM (VALUES ('One, Street', 'drop', 1::BIGINT, 'AB1 2CD'),
+                                  (NULL, 'drop', 2::BIGINT, NULL))
+            t(FullAddress, Unused, UPRN, Postcode)
+        """)
+        if not keep_all:
+            expected = expected.project("FullAddress, UPRN, Postcode")
+        assert actual.columns == expected.columns
+        assert actual.types == expected.types
+        assert actual.order("UPRN").fetchall() == expected.order("UPRN").fetchall()
+
+
+def test_ngd_projected_sources_preserve_complete_fixture_build(tmp_path: Path) -> None:
+    from ukam_os_builder.data_sources.ngd.to_flatfile import run_flatfile_step
+
+    outputs = []
+    sources = []
+    for keep_all in (True, False):
+        work = tmp_path / str(keep_all)
+        work.mkdir()
+        settings = _settings(work)
+        settings.processing.ngd_keep_all_columns = keep_all
+        settings.processing.num_chunks = 2
+        for csv in sorted((Path(__file__).parent / "data").glob("*.csv")):
+            _write_zip(
+                settings.paths.downloads_dir / f"{csv.stem}.zip",
+                {f"nested/{csv.name}": csv.read_text()},
+            )
+        sources.append(extract.run_extract_step(settings))
+        outputs.append(run_flatfile_step(settings))
+
+    with duckdb.connect() as con:
+        # Verify every retained field, including inferred types, in each source family.
+        for full, narrow in zip(sources[0], sources[1], strict=True):
+            left = con.read_parquet(str(full))
+            right = con.read_parquet(str(narrow))
+            assert len(right.columns) < len(left.columns)
+            left = left.project(", ".join('"' + name + '"' for name in right.columns))
+            assert left.columns == right.columns and left.types == right.types
+            left.create_view("l", replace=True)
+            right.create_view("r", replace=True)
+            assert con.sql("FROM l EXCEPT ALL FROM r").fetchall() == []
+            assert con.sql("FROM r EXCEPT ALL FROM l").fetchall() == []
+        # The two chunks preserve all canonical values and multiplicities.
+        for full, narrow in zip(outputs[0], outputs[1], strict=True):
+            left = con.read_parquet(str(full))
+            right = con.read_parquet(str(narrow))
+            assert left.columns == right.columns and left.types == right.types
+            left.create_view("l", replace=True)
+            right.create_view("r", replace=True)
+            assert con.sql("FROM l EXCEPT ALL FROM r").fetchall() == []
+            assert con.sql("FROM r EXCEPT ALL FROM l").fetchall() == []
+
+
 def test_ngd_raw_csv_extraction_keeps_side_members(tmp_path: Path) -> None:
     settings = _settings(tmp_path)
     members = {
