@@ -142,6 +142,13 @@ def test_ngd_projection_preserves_values_and_source_column_order(
 def test_ngd_projected_sources_preserve_complete_fixture_build(tmp_path: Path) -> None:
     from ukam_os_builder.data_sources.ngd.to_flatfile import run_flatfile_step
 
+    fixture_dir = Path(__file__).parent / "data"
+    fixture_sources = {csv.stem: csv.read_text() for csv in fixture_dir.glob("*.csv")}
+    # Exercise the remaining file families with the same synthetic source schemas.
+    fixture_sources["add_gb_nonaddressableobject"] = fixture_sources["add_gb_prebuildaddress"]
+    for stem in ("historicaddress", "nonaddressableobject", "prebuildaddress"):
+        fixture_sources[f"add_gb_{stem}_altadd"] = fixture_sources["add_gb_builtaddress_altadd"]
+
     outputs = []
     sources = []
     for keep_all in (True, False):
@@ -150,10 +157,10 @@ def test_ngd_projected_sources_preserve_complete_fixture_build(tmp_path: Path) -
         settings = _settings(work)
         settings.processing.ngd_keep_all_columns = keep_all
         settings.processing.num_chunks = 2
-        for csv in sorted((Path(__file__).parent / "data").glob("*.csv")):
+        for stem, content in sorted(fixture_sources.items()):
             _write_zip(
-                settings.paths.downloads_dir / f"{csv.stem}.zip",
-                {f"nested/{csv.name}": csv.read_text()},
+                settings.paths.downloads_dir / f"{stem}.zip",
+                {f"nested/{stem}.csv": content},
             )
         sources.append(extract.run_extract_step(settings))
         outputs.append(run_flatfile_step(settings))
@@ -179,6 +186,24 @@ def test_ngd_projected_sources_preserve_complete_fixture_build(tmp_path: Path) -
             right.create_view("r", replace=True)
             assert con.sql("FROM l EXCEPT ALL FROM r").fetchall() == []
             assert con.sql("FROM r EXCEPT ALL FROM l").fetchall() == []
+
+
+def test_ngd_keep_all_columns_requires_forced_reextraction(tmp_path: Path) -> None:
+    settings = _settings(tmp_path)
+    _write_zip(
+        settings.paths.downloads_dir / "add_gb_builtaddress.zip",
+        {"add_gb_builtaddress.csv": "uprn,fulladdress,unused\n1,One Street,retained\n"},
+    )
+    [output] = extract.run_extract_step(settings)
+    settings.processing.ngd_keep_all_columns = True
+    assert extract.run_extract_step(settings) == [output]
+    with duckdb.connect() as con:
+        assert con.read_parquet(str(output)).columns == ["uprn", "fulladdress"]
+    assert extract.run_extract_step(settings, force=True) == [output]
+    with duckdb.connect() as con:
+        actual = con.read_parquet(str(output))
+        assert actual.columns == ["uprn", "fulladdress", "unused"]
+        assert actual.fetchall() == [(1, "One Street", "retained")]
 
 
 def test_ngd_raw_csv_extraction_keeps_side_members(tmp_path: Path) -> None:
