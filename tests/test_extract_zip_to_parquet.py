@@ -56,7 +56,9 @@ def _count_rows(parquet_path: Path) -> int:
         con.close()
 
 
-def test_ngd_converts_zip_members_without_extracting_csv(tmp_path: Path) -> None:
+def test_ngd_converts_zip_members_without_extracting_csv(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     settings = _settings(tmp_path)
     _write_zip(
         settings.paths.downloads_dir / "add_gb_builtaddress.zip",
@@ -71,6 +73,14 @@ def test_ngd_converts_zip_members_without_extracting_csv(tmp_path: Path) -> None
         {"add_gb_streetaddress.csv": "streetid,name\n1,One Street\n"},
     )
 
+    original_open = zipfile.ZipFile.open
+
+    def open_consumed_member(archive, name, *args, **kwargs):
+        member_name = name.filename if isinstance(name, zipfile.ZipInfo) else name
+        assert not member_name.endswith(("_rltenty.csv", "streetaddress.csv"))
+        return original_open(archive, name, *args, **kwargs)
+
+    monkeypatch.setattr(zipfile.ZipFile, "open", open_consumed_member)
     outputs = extract.run_extract_step(settings, force=True)
 
     assert sorted(path.name for path in outputs) == [
@@ -78,6 +88,19 @@ def test_ngd_converts_zip_members_without_extracting_csv(tmp_path: Path) -> None
         "add_gb_builtaddress_altadd.parquet",
     ]
     assert [_count_rows(path) for path in outputs] == [2, 1]
+    assert not list(settings.paths.extracted_dir.rglob("*.csv"))
+
+
+@pytest.mark.parametrize("stem", ["builtaddress_rltenty", "builtaddress_othcls", "streetaddress"])
+def test_ngd_skips_archives_containing_only_unused_members(tmp_path: Path, stem: str) -> None:
+    settings = _settings(tmp_path)
+    _write_zip(
+        settings.paths.downloads_dir / f"add_gb_{stem}.zip",
+        {f"nested/add_gb_{stem}.csv": "unused,value\n1,ignored\n"},
+    )
+
+    assert extract.run_extract_step(settings) == []
+    assert not list(settings.paths.extracted_dir.rglob("*.parquet"))
     assert not list(settings.paths.extracted_dir.rglob("*.csv"))
 
 

@@ -76,9 +76,8 @@ def _should_convert_csv_to_parquet(
         # Import at call time: the NGD consumer also uses this module's SQL helper.
         from ukam_os_builder.data_sources.ngd.to_flatfile import FEATURE_TYPE_BY_STEM
 
-        return (
-            csv_path.stem.lower() in FEATURE_TYPE_BY_STEM
-            and not ngd_file_matches_excluded_stem(csv_path.name, ngd_excluded_stems)
+        return csv_path.stem.lower() in FEATURE_TYPE_BY_STEM and not ngd_file_matches_excluded_stem(
+            csv_path.name, ngd_excluded_stems
         )
     return True
 
