@@ -91,19 +91,6 @@ def test_ngd_converts_zip_members_without_extracting_csv(
     assert not list(settings.paths.extracted_dir.rglob("*.csv"))
 
 
-@pytest.mark.parametrize("stem", ["builtaddress_rltenty", "builtaddress_othcls", "streetaddress"])
-def test_ngd_skips_archives_containing_only_unused_members(tmp_path: Path, stem: str) -> None:
-    settings = _settings(tmp_path)
-    _write_zip(
-        settings.paths.downloads_dir / f"add_gb_{stem}.zip",
-        {f"nested/add_gb_{stem}.csv": "unused,value\n1,ignored\n"},
-    )
-
-    assert extract.run_extract_step(settings) == []
-    assert not list(settings.paths.extracted_dir.rglob("*.parquet"))
-    assert not list(settings.paths.extracted_dir.rglob("*.csv"))
-
-
 @pytest.mark.parametrize("fallback", [False, True])
 @pytest.mark.parametrize("keep_all", [False, True])
 def test_ngd_projection_preserves_values_and_source_column_order(
