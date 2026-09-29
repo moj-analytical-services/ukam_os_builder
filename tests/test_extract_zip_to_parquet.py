@@ -56,16 +56,31 @@ def _count_rows(parquet_path: Path) -> int:
         con.close()
 
 
-def test_ngd_converts_zip_members_without_extracting_csv(tmp_path: Path) -> None:
+def test_ngd_converts_zip_members_without_extracting_csv(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     settings = _settings(tmp_path)
     _write_zip(
         settings.paths.downloads_dir / "add_gb_builtaddress.zip",
         {
             "nested/add_gb_builtaddress.csv": "uprn,fulladdress\n1,One Street\n2,Two Street\n",
             "nested/add_gb_builtaddress_altadd.csv": "uprn,fulladdress\n3,Three Street\n",
+            "nested/add_gb_builtaddress_rltenty.csv": "uprn,related\n1,99\n",
         },
     )
+    _write_zip(
+        settings.paths.downloads_dir / "add_gb_streetaddress.zip",
+        {"add_gb_streetaddress.csv": "streetid,name\n1,One Street\n"},
+    )
 
+    original_open = zipfile.ZipFile.open
+
+    def open_consumed_member(archive, name, *args, **kwargs):
+        member_name = name.filename if isinstance(name, zipfile.ZipInfo) else name
+        assert not member_name.endswith(("_rltenty.csv", "streetaddress.csv"))
+        return original_open(archive, name, *args, **kwargs)
+
+    monkeypatch.setattr(zipfile.ZipFile, "open", open_consumed_member)
     outputs = extract.run_extract_step(settings, force=True)
 
     assert sorted(path.name for path in outputs) == [
@@ -74,6 +89,57 @@ def test_ngd_converts_zip_members_without_extracting_csv(tmp_path: Path) -> None
     ]
     assert [_count_rows(path) for path in outputs] == [2, 1]
     assert not list(settings.paths.extracted_dir.rglob("*.csv"))
+
+
+def test_ngd_projected_sources_preserve_complete_fixture_build(tmp_path: Path) -> None:
+    from ukam_os_builder.data_sources.ngd.to_flatfile import run_flatfile_step
+
+    fixture_dir = Path(__file__).parent / "data"
+    fixture_sources = {csv.stem: csv.read_text() for csv in fixture_dir.glob("*.csv")}
+    # Exercise the remaining file families with the same synthetic source schemas.
+    fixture_sources["add_gb_nonaddressableobject"] = fixture_sources["add_gb_prebuildaddress"]
+    for stem in ("historicaddress", "nonaddressableobject", "prebuildaddress"):
+        fixture_sources[f"add_gb_{stem}_altadd"] = fixture_sources["add_gb_builtaddress_altadd"]
+
+    outputs = []
+    for keep_all in (True, False):
+        work = tmp_path / str(keep_all)
+        work.mkdir()
+        settings = _settings(work)
+        settings.processing.ngd_keep_all_columns = keep_all
+        settings.processing.num_chunks = 2
+        for stem, content in sorted(fixture_sources.items()):
+            _write_zip(
+                settings.paths.downloads_dir / f"{stem}.zip",
+                {f"nested/{stem}.csv": content},
+            )
+        extract.run_extract_step(settings)
+        outputs.append(run_flatfile_step(settings))
+
+    with duckdb.connect() as con:
+        # The two chunks preserve all canonical values and multiplicities.
+        for full, narrow in zip(outputs[0], outputs[1], strict=True):
+            left = con.read_parquet(str(full))
+            right = con.read_parquet(str(narrow))
+            assert left.columns == right.columns and left.types == right.types
+            left.create_view("l", replace=True)
+            right.create_view("r", replace=True)
+            assert con.sql("FROM l EXCEPT ALL FROM r").fetchall() == []
+            assert con.sql("FROM r EXCEPT ALL FROM l").fetchall() == []
+
+
+def test_ngd_raw_csv_extraction_keeps_side_members(tmp_path: Path) -> None:
+    settings = _settings(tmp_path)
+    members = {
+        "add_gb_builtaddress.csv": "uprn,fulladdress\n1,One Street\n",
+        "add_gb_builtaddress_rltenty.csv": "uprn,related\n1,99\n",
+    }
+    _write_zip(settings.paths.downloads_dir / "add_gb_builtaddress.zip", members)
+
+    outputs = extract.run_extract_step(settings, force=True, convert_to_parquet=False)
+
+    assert {path.name for path in outputs} == set(members)
+    assert all(path.read_text() == members[path.name] for path in outputs)
 
 
 def test_ngd_zip_member_exclusions_are_applied_before_conversion(tmp_path: Path) -> None:
@@ -113,7 +179,7 @@ def test_ngd_falls_back_to_csv_extraction_when_zip_filesystem_fails(
     settings = _settings(tmp_path)
     _write_zip(
         settings.paths.downloads_dir / "add_gb_builtaddress.zip",
-        {"add_gb_builtaddress.csv": "uprn,fulladdress\n1,One Street\n"},
+        {"add_gb_builtaddress.csv": "uprn,fulladdress,unused\n1,One Street,drop\n"},
     )
 
     def fail_filesystem(*args: object, **kwargs: object) -> object:
@@ -125,6 +191,8 @@ def test_ngd_falls_back_to_csv_extraction_when_zip_filesystem_fails(
         outputs = extract.run_extract_step(settings, force=True)
 
     assert [_count_rows(path) for path in outputs] == [1]
+    with duckdb.connect() as con:
+        assert con.read_parquet(str(outputs[0])).columns == ["uprn", "fulladdress"]
     assert list(settings.paths.extracted_dir.rglob("*.csv"))
     assert "falling back to CSV extraction" in caplog.text
 
@@ -175,14 +243,25 @@ def test_ngd_reuses_direct_parquet_outputs_without_extracting_csv(tmp_path: Path
     settings = _settings(tmp_path)
     _write_zip(
         settings.paths.downloads_dir / "add_gb_builtaddress.zip",
-        {"add_gb_builtaddress.csv": "uprn,fulladdress\n1,One Street\n"},
+        {"add_gb_builtaddress.csv": 'FullAddress,Unused,UPRN\n"One, Street",keep,1\n,keep,2\n'},
     )
 
     first_outputs = extract.run_extract_step(settings, force=True)
+    settings.processing.ngd_keep_all_columns = True
     second_outputs = extract.run_extract_step(settings, force=False)
 
     assert second_outputs == first_outputs
     assert not list(settings.paths.extracted_dir.rglob("*.csv"))
+    with duckdb.connect() as con:
+        actual = con.read_parquet(str(first_outputs[0]))
+        assert actual.columns == ["FullAddress", "UPRN"]
+        assert actual.order("UPRN").fetchall() == [("One, Street", 1), (None, 2)]
+
+    assert extract.run_extract_step(settings, force=True) == first_outputs
+    with duckdb.connect() as con:
+        actual = con.read_parquet(str(first_outputs[0]))
+        assert actual.columns == ["FullAddress", "Unused", "UPRN"]
+        assert actual.order("UPRN").fetchall() == [("One, Street", "keep", 1), (None, "keep", 2)]
 
 
 def test_ngd_rejects_duplicate_member_output_names(tmp_path: Path) -> None:
@@ -217,4 +296,42 @@ def test_ngd_rejects_duplicate_outputs_across_archives(tmp_path: Path) -> None:
         extract.run_extract_step(settings, force=True)
 
     assert not list(settings.paths.extracted_dir.rglob("*.parquet"))
+    assert not list(settings.paths.extracted_dir.rglob("*.csv"))
+
+
+def test_large_zip_csv_is_exact_with_multiple_writer_threads(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    settings = _settings(tmp_path)
+    csv_path = tmp_path / "source.csv"
+    expected_sql = (
+        "SELECT i AS uprn, repeat('ADDRESS ', 20) || i::VARCHAR AS fulladdress "
+        "FROM range(150000) AS t(i)"
+    )
+    with duckdb.connect() as con:
+        con.execute(f"COPY ({expected_sql}) TO '{csv_path}' (HEADER)")
+    with zipfile.ZipFile(
+        settings.paths.downloads_dir / "add_gb_builtaddress.zip", "w", zipfile.ZIP_DEFLATED
+    ) as archive:
+        archive.write(csv_path, "add_gb_builtaddress.csv")
+
+    original_connect = extract.create_duckdb_connection
+
+    def parallel_connection(settings: Settings) -> duckdb.DuckDBPyConnection:
+        con = original_connect(settings)
+        con.execute("SET threads=8")
+        return con
+
+    monkeypatch.setattr(extract, "create_duckdb_connection", parallel_connection)
+    [output] = extract.run_extract_step(settings)
+    with duckdb.connect() as con:
+        actual = con.read_parquet(str(output))
+        assert actual.columns == ["uprn", "fulladdress"]
+        assert [str(t) for t in actual.types] == ["BIGINT", "VARCHAR"]
+        actual.create_view("actual")
+        con.sql(expected_sql).create_view("expected")
+        assert con.execute(
+            "SELECT count(*) FROM ((FROM actual EXCEPT ALL FROM expected) "
+            "UNION ALL (FROM expected EXCEPT ALL FROM actual))"
+        ).fetchone() == (0,)
     assert not list(settings.paths.extracted_dir.rglob("*.csv"))

@@ -73,9 +73,11 @@ def _should_convert_csv_to_parquet(
     ngd_excluded_stems: list[str] | None = None,
 ) -> bool:
     if source.lower() == "ngd":
-        return is_ngd_address_file(csv_path.name) and not ngd_file_matches_excluded_stem(
-            csv_path.name,
-            ngd_excluded_stems,
+        # Import at call time: the NGD consumer also uses this module's SQL helper.
+        from ukam_os_builder.data_sources.ngd.to_flatfile import FEATURE_TYPE_BY_STEM
+
+        return csv_path.stem.lower() in FEATURE_TYPE_BY_STEM and not ngd_file_matches_excluded_stem(
+            csv_path.name, ngd_excluded_stems
         )
     return True
 
@@ -186,6 +188,21 @@ def _copy_csv_source_to_parquet(
     output_path.parent.mkdir(parents=True, exist_ok=True)
     temporary_path = _temporary_output_path(output_path)
     compression, compression_level = _processing_parquet_options(settings)
+    # ZipExtFile is a sequential decompressor; concurrent CSV reads can corrupt
+    # its shared stream. Keep the Parquet writer and ordinary CSV reads parallel.
+    reader_options = ", parallel=false" if csv_source.startswith("zip://") else ""
+    projection = "*"
+    if (
+        settings is not None
+        and settings.source.type.lower() == "ngd"
+        and not settings.processing.ngd_keep_all_columns
+    ):
+        # Import here to avoid the consumer's dependency on this module's SQL helper.
+        from ukam_os_builder.data_sources.ngd.to_flatfile import SOURCE_COLUMNS_BY_STEM
+
+        columns = SOURCE_COLUMNS_BY_STEM.get(output_path.stem.lower())
+        if columns:
+            projection = "COLUMNS('(?i)^(" + "|".join(columns) + ")$')"
 
     logger.debug("Converting %s -> %s", csv_source, output_path.name)
 
@@ -193,7 +210,7 @@ def _copy_csv_source_to_parquet(
         con.execute(
             f"""
             COPY (
-                SELECT * FROM read_csv_auto(?, sample_size=1000000)
+                SELECT {projection} FROM read_csv_auto(?, sample_size=1000000{reader_options})
             ) TO '{_sql_string(temporary_path.as_posix())}' (
                 FORMAT 'PARQUET',
                 COMPRESSION '{_sql_string(compression)}',
@@ -481,6 +498,16 @@ def run_extract_step(
                 ngd_excluded_stems,
             )
             if not members:
+                with zipfile.ZipFile(zip_path) as archive:
+                    address_csvs = any(
+                        name.lower().endswith(".csv") and is_ngd_address_file(name)
+                        for name in archive.namelist()
+                    )
+                if address_csvs:
+                    logger.info(
+                        "Skipping archive with no canonical address members: %s", zip_path.name
+                    )
+                    continue
                 raise ValueError(f"No eligible CSV members found in {zip_path}")
 
             for member in members:

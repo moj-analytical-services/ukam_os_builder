@@ -28,6 +28,9 @@ os_downloads:
 
 # Processing options
 processing:
+  # NGD source Parquets retain only fields used by canonical building.
+  # Set true to keep every source column; use --force after changing this option.
+  ngd_keep_all_columns: false
   # Parquet compression settings
   parquet_compression: zstd
   parquet_compression_level: 9

@@ -95,6 +95,7 @@ class ProcessingSettings(StrictBaseModel):
     duckdb_memory_limit: str | None = None
     num_chunks: int = 10
     ngd_excluded_stems: list[str] = Field(default_factory=lambda: list(DEFAULT_NGD_EXCLUDED_STEMS))
+    ngd_keep_all_columns: bool = False
     abp_excluded_logical_statuses: list[int] = Field(
         default_factory=lambda: list(DEFAULT_ABP_EXCLUDED_LOGICAL_STATUSES)
     )

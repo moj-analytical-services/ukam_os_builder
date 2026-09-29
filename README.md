@@ -282,6 +282,14 @@ matching alternate-address file is excluded too; for example, `builtaddress` exc
 both `add_gb_builtaddress` and `add_gb_builtaddress_altadd`.
 To include NGD historic addresses, set `ngd_excluded_stems: []`.
 
+NGD extraction converts only the CSV feature types consumed by canonical building;
+related-entity and street-address side files remain in the original ZIPs. Source
+Parquets retain only the columns used by address construction and metadata lookup.
+This reduces CSV conversion and Parquet writing without changing the final address
+schema. Set `processing.ngd_keep_all_columns: true` if you also use other source
+columns, and rerun extraction with `--force` when changing this setting. Existing
+source Parquets are otherwise reused. Raw CSV extraction and ABP are unchanged.
+
 To change ABP status exclusions, set `processing.abp_excluded_logical_statuses`
 or pass `--abp-excluded-logical-statuses`.
 Valid values are `1` (approved), `3` (alternative), `6` (provisional), and `8` (historic).

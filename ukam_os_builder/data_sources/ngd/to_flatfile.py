@@ -57,6 +57,68 @@ ALTADD_STEMS = {
     "add_gb_prebuildaddress_altadd",
 }
 
+# Source fields consumed by the address and metadata views below. Keep names
+# case-insensitive and preserve source order/types when projecting during COPY.
+CORE_SOURCE_COLUMNS = (
+    "uprn",
+    "fulladdress",
+    "postcode",
+    "classificationcode",
+    "parentuprn",
+    "rootuprn",
+    "hierarchylevel",
+    "floorlevel",
+    "lowestfloorlevel",
+    "highestfloorlevel",
+    "description",
+    "addressstatus",
+    "buildstatus",
+    "alternatelanguage",
+    "alternatelanguagefulladdress",
+    "alternatelanguagesubname",
+    "alternatelanguagename",
+    "alternatelanguagenumber",
+    "alternatelanguagestreetname",
+    "alternatelanguagelocality",
+    "alternatelanguagetownname",
+    "alternatelanguageislandname",
+    "lowertierlocalauthoritygsscode",
+)
+ALTADD_SOURCE_COLUMNS = (
+    "uprn",
+    "fulladdress",
+    "postcode",
+    "floorlevel",
+    "lowestfloorlevel",
+    "highestfloorlevel",
+    "addressstatus",
+)
+ROYAL_MAIL_SOURCE_COLUMNS = (
+    "uprn",
+    "matchedaddressfeaturetype",
+    "organisationname",
+    "departmentname",
+    "subbuildingname",
+    "buildingname",
+    "buildingnumber",
+    "dependentthoroughfare",
+    "thoroughfare",
+    "doubledependentlocality",
+    "dependentlocality",
+    "posttown",
+    "postcode",
+    "welshdependentthoroughfare",
+    "welshthoroughfare",
+    "welshdoubledependentlocality",
+    "welshdependentlocality",
+    "welshposttown",
+)
+SOURCE_COLUMNS_BY_STEM = {
+    **dict.fromkeys(CORE_FEATURE_STEMS, CORE_SOURCE_COLUMNS),
+    **dict.fromkeys(ALTADD_STEMS, ALTADD_SOURCE_COLUMNS),
+    "add_gb_royalmailaddress": ROYAL_MAIL_SOURCE_COLUMNS,
+}
+
 # Priority order for metadata lookup (lower = higher priority)
 CORE_FEATURE_PRIORITY = {
     "add_gb_builtaddress": 1,
