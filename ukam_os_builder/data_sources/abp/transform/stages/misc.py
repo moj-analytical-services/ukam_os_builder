@@ -94,14 +94,17 @@ def render_custom_levels(con: duckdb.DuckDBPyConnection) -> None:
         CREATE TEMPORARY TABLE _stage_custom_level_variants AS
         WITH level_parsed AS (
             SELECT
-                uprn, postcode, base_address,
+                l.uprn, l.postcode, l.base_address, cb.classification_code,
                 CASE
-                    WHEN split_part(level, ',', 1) ~ '^-?[0-9]+$'
-                        THEN CAST(split_part(level, ',', 1) AS INTEGER)
+                    WHEN split_part(l.level, ',', 1) ~ '^-?[0-9]+$'
+                        THEN CAST(split_part(l.level, ',', 1) AS INTEGER)
                     ELSE NULL
                 END AS level_int
-            FROM lpi_base_full
-            WHERE level IS NOT NULL AND base_address IS NOT NULL AND base_address <> ''
+            FROM lpi_base_full l
+            LEFT JOIN classification_best cb ON cb.uprn = l.uprn
+            WHERE l.level IS NOT NULL
+              AND l.base_address IS NOT NULL
+              AND l.base_address <> ''
         ),
         level_words AS (
             SELECT
@@ -118,6 +121,18 @@ def render_custom_levels(con: duckdb.DuckDBPyConnection) -> None:
                 END AS level_word
             FROM level_parsed
             WHERE level_int BETWEEN -1 AND 6
+              AND NOT COALESCE(
+                  level_int = 0
+                  AND classification_code IN (
+                      'RD01', -- Caravan
+                      'RD02', -- Detached
+                      'RD03', -- Semi-detached
+                      'RD04', -- Terraced
+                      'RD07', -- House boat
+                      'RD10'  -- Privately owned holiday caravan/chalet
+                  ),
+                  FALSE
+              )
         )
         SELECT
             uprn,
@@ -133,5 +148,10 @@ def render_custom_levels(con: duckdb.DuckDBPyConnection) -> None:
             'CUSTOM_LEVEL' AS variant_label,
             FALSE AS is_primary
         FROM level_words
-        WHERE level_word IS NOT NULL
+                WHERE level_word IS NOT NULL
+                    AND NOT regexp_matches(
+                            base_address,
+                            '(^|[^A-Z0-9])' || level_word || '([^A-Z0-9]|$)',
+                            'i'
+                    )
     """)
