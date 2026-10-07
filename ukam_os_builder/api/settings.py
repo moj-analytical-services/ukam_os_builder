@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import os
+from enum import Enum
 from functools import cache
 from pathlib import Path
 from typing import Any, Literal
@@ -122,6 +123,46 @@ class ProcessingSettings(StrictBaseModel):
         return normalise_abp_excluded_logical_statuses(value)
 
 
+_AZURE_BLOB_HOST_SUFFIX = ".blob.core.windows.net"
+
+
+class OutputTarget(str, Enum):
+    """Where final output files are written."""
+
+    LOCAL_DISK = "local_disk"
+    BLOB = "blob"
+
+
+class OutputBlobSettings(StrictBaseModel):
+    """Azure Blob Storage settings for output flat files.
+
+    For now, only ``az://<account>.blob.core.windows.net/<container>/<prefix>`` is supported.
+    """
+
+    uri: str
+
+    @field_validator("uri")
+    @classmethod
+    def _validate_uri(cls, value: str) -> str:
+        uri = value.strip().rstrip("/")
+        host, _, path = uri.removeprefix("az://").partition("/")
+        if (
+            not uri.startswith("az://")
+            or not host.lower().endswith(_AZURE_BLOB_HOST_SUFFIX)
+            or len(host) == len(_AZURE_BLOB_HOST_SUFFIX)
+            or not path.partition("/")[0]
+        ):
+            raise ValueError(
+                "Only az://<account>.blob.core.windows.net/<container>/<prefix> is currently supported."
+            )
+        return uri
+
+    @property
+    def account(self) -> str:
+        host = self.uri.removeprefix("az://").partition("/")[0]
+        return host[: -len(_AZURE_BLOB_HOST_SUFFIX)]
+
+
 class Settings(StrictBaseModel):
     """Complete application settings."""
 
@@ -129,7 +170,12 @@ class Settings(StrictBaseModel):
     source: SourceSettings = SourceSettings()
     os_downloads: OSDownloadSettings
     processing: ProcessingSettings
+    output_blob: OutputBlobSettings | None = None
     config_path: Path
+
+    @property
+    def output_target(self) -> OutputTarget:
+        return OutputTarget.LOCAL_DISK if self.output_blob is None else OutputTarget.BLOB
 
 
 class SettingsError(Exception):
@@ -306,3 +352,29 @@ def create_duckdb_connection(settings: Settings) -> duckdb.DuckDBPyConnection:
         _log_duckdb_memory_limit(settings.processing.duckdb_memory_limit)
 
     return con
+
+
+def configure_azure_output(con: duckdb.DuckDBPyConnection, settings: Settings) -> None:
+    """Load DuckDB's azure extension and create a secret scoped to the target ``output_blob``.
+
+    Authenticates with the Azure credential chain (az login, managed identity or AZURE_* env vars).
+    """
+    blob = settings.output_blob
+    if blob is None:
+        return
+
+    major, minor, patch = (int(p) for p in duckdb.__version__.split(".")[:3])
+    if (major, minor, patch) < (1, 4, 3):
+        raise SettingsError(
+            f"output_blob requires duckdb>=1.4.3 (found {duckdb.__version__}); "
+            'install with: uv add "ukam-os-builder[azure]"'
+        )
+
+    con.execute("INSTALL azure")
+    con.execute("LOAD azure")
+    account = blob.account.replace("'", "''")
+    scope = (blob.uri + "/").replace("'", "''")
+    con.execute(
+        "CREATE OR REPLACE SECRET ukam_output (TYPE azure, PROVIDER credential_chain, "
+        f"ACCOUNT_NAME '{account}', SCOPE '{scope}')"
+    )

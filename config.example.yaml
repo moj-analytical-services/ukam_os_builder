@@ -59,3 +59,11 @@ processing:
   # Valid values: 1 (approved), 3 (alternative), 6 (provisional), 8 (historic)
   abp_excluded_logical_statuses:
     - 8
+
+# Optional (NGD only): write final output files to Azure Blob Storage instead of
+# output_dir. Requires: pip install "ukam-os-builder[azure]" (duckdb>=1.4.3).
+# Authenticates with the Azure credential chain (az login, managed identity, or
+# AZURE_CLIENT_ID/AZURE_TENANT_ID/AZURE_CLIENT_SECRET).
+# Doesn't work for all blob types yet (only az:// URIs are supported)
+# output_blob:
+#   uri: az://<account>.blob.core.windows.net/<container>/<prefix>
