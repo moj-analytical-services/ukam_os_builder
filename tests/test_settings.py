@@ -6,7 +6,16 @@ from textwrap import dedent
 import pytest
 from pydantic import ValidationError
 
-from ukam_os_builder.api.settings import SettingsError, load_settings
+from ukam_os_builder.api.settings import (
+    OSDownloadSettings,
+    OutputBlobSettings,
+    PathSettings,
+    ProcessingSettings,
+    Settings,
+    SettingsError,
+    configure_azure_output,
+    load_settings,
+)
 
 
 def _write_config(path: Path, content: str) -> None:
@@ -365,3 +374,49 @@ def test_load_settings_rejects_legacy_path_keys(
 
     with pytest.raises(SettingsError, match="no longer supported"):
         load_settings(config_path, load_env=False)
+
+
+def test_configure_azure_output_creates_scoped_secret(tmp_path: Path) -> None:
+    class RecordingConnection:
+        statements: list[str] = []
+
+        def execute(self, sql: str) -> None:
+            self.statements.append(sql)
+
+    settings = Settings(
+        paths=PathSettings(
+            work_dir=tmp_path,
+            downloads_dir=tmp_path / "downloads",
+            extracted_dir=tmp_path / "extracted",
+            output_dir=tmp_path / "output",
+        ),
+        os_downloads=OSDownloadSettings(package_id="1", version_id="1"),
+        processing=ProcessingSettings(),
+        output_blob=OutputBlobSettings(uri="az://dnadatastore.blob.core.windows.net/outputs/ngd/"),
+        config_path=tmp_path / "config.yaml",
+    )
+    con = RecordingConnection()
+
+    configure_azure_output(con, settings)  # type: ignore[arg-type]
+
+    assert con.statements == [
+        "INSTALL azure",
+        "LOAD azure",
+        "CREATE OR REPLACE SECRET ukam_output (TYPE azure, PROVIDER credential_chain, "
+        "ACCOUNT_NAME 'dnadatastore', SCOPE 'az://dnadatastore.blob.core.windows.net/outputs/ngd/')",
+    ]
+
+
+@pytest.mark.parametrize(
+    "uri",
+    [
+        "az://outputs/ngd",  # no account host
+        "az://dnadatastore.blob.core.windows.net",  # no container
+        "abfss://dnadatastore.dfs.core.windows.net/outputs/ngd",
+        "s3://outputs/ngd",
+        "gs://outputs/ngd",
+    ],
+)
+def test_output_blob_rejects_unsupported_uri(uri: str) -> None:
+    with pytest.raises(ValidationError, match=r"az://<account>\.blob\.core\.windows\.net"):
+        OutputBlobSettings(uri=uri)

@@ -188,6 +188,8 @@ Final outputs are parquet files in `paths.output_dir`:
 
 Chunking reduces memory use by processing UPRNs in batches. The default is `num_chunks: 10`, and the union of all chunk files equals the single-chunk output. Increase `num_chunks` for very large canonical files or machines with limited RAM; set it to `1` only when a single output file is explicitly required.
 
+NGD Feature only: set `output_blob.uri: az://<account>.blob.core.windows.net/<container>/<prefix>` in `config.yaml` to write the chunks straight to Azure Blob Storage instead (needs `pip install "ukam-os-builder[azure]"` and `az login` or a managed identity to run in an Azure Function App or Container App Job).
+
 ## Schemas
 
 <details>

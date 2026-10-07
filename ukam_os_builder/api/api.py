@@ -9,7 +9,7 @@ import duckdb
 import requests
 import yaml
 
-from ukam_os_builder.api.settings import Settings, SettingsError, load_settings
+from ukam_os_builder.api.settings import OutputTarget, Settings, SettingsError, load_settings
 from ukam_os_builder.data_sources.abp.abp_exclusions import (
     DEFAULT_ABP_EXCLUDED_LOGICAL_STATUSES,
     format_valid_abp_excluded_logical_statuses,
@@ -489,13 +489,21 @@ def run_from_config(
     overwrite_effective = overwrite if overwrite is not None else bool(force)
     run_pipeline(step=step, settings=settings, force=overwrite_effective, list_only=list_only)
 
+    is_blob = settings.output_target is OutputTarget.BLOB
+    if is_blob:
+        output_label = "output_blob"
+        output_display = settings.output_blob.uri
+    else:
+        output_label = "output_dir"
+        output_display = str(settings.paths.output_dir)
+
     completion_message = (
         "✅ Pipeline run completed\n\n"
         "Where you need to look:\n"
         "  • downloads_dir (raw OS Hub extracts): %s%s\n"
-        "  • output_dir (final files for address matcher): %s%s"
+        f"  • {output_label} (final files for address matcher): %s%s"
     )
-    if step in {"all", "flatfile"}:
+    if step in {"all", "flatfile"} and not is_blob:
         completion_message += "\n\n" + _format_output_metadata(
             settings.paths.output_dir,
             source_type,
@@ -505,7 +513,7 @@ def run_from_config(
         completion_message,
         str(settings.paths.downloads_dir),
         "",
-        str(settings.paths.output_dir),
+        output_display,
         "",
     )
 

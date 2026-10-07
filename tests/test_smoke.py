@@ -9,6 +9,7 @@ import pytest
 
 from ukam_os_builder.api.settings import (
     OSDownloadSettings,
+    OutputBlobSettings,
     PathSettings,
     ProcessingSettings,
     Settings,
@@ -278,3 +279,19 @@ def test_deduplication(temp_settings: Settings) -> None:
 
     assert len(result) == 0, f"Should have no duplicate UPRN+address: {result}"
     con.close()
+
+
+def test_flatfile_writes_to_output_blob(
+    temp_settings: Settings, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """With output_blob set, output is written to the blob URI (a local folder stands in for now)."""
+    _prepare_test_parquet(temp_settings)
+    temp_settings.output_blob = OutputBlobSettings.model_construct(uri=tmp_path.as_posix())
+    monkeypatch.setattr(
+        "ukam_os_builder.data_sources.ngd.to_flatfile.configure_azure_output",
+        lambda *_: None,
+    )
+
+    outputs = run_flatfile_step(temp_settings, force=True)
+
+    assert outputs == [f"{tmp_path.as_posix()}/ngd_for_uk_address_matcher.chunk_001_of_001.parquet"]
