@@ -125,6 +125,7 @@ def main(argv: list[str] | None = None) -> int:
     config_out = Path(args.config_out).resolve()
     env_out = Path(args.env_out).resolve()
     write_env = True
+    download_data = True
     overwrite_env = args.overwrite_env
     api_key = args.api_key
     api_secret = args.api_secret
@@ -150,6 +151,9 @@ def main(argv: list[str] | None = None) -> int:
                 border_style="cyan",
             )
         )
+        download_data = _confirm(
+            "Download data directly from OS Data Hub (No: use previous downloads)?"
+        )
         console.print("[bold]Source options:[/bold]")
         console.print("- [bold]ngd[/bold]: OS NGD Address (National Geographic Database)")
         console.print("- [bold]abp[/bold]: OS AddressBase Premium")
@@ -159,15 +163,18 @@ def main(argv: list[str] | None = None) -> int:
             parser.error("source must be 'ngd' or 'abp'")
         config["source"]["type"] = source_value
 
-        console.print("[bold]Mandatory settings[/bold]")
-        config["os_downloads"]["package_id"] = _prompt_non_empty(
-            "OS package_id",
-            "",
-        )
-        config["os_downloads"]["version_id"] = _prompt_non_empty(
-            "OS version_id",
-            "",
-        )
+        if download_data:
+            console.print("[bold]Mandatory settings[/bold]")
+            config["os_downloads"]["package_id"] = _prompt_non_empty("OS package_id", "")
+            config["os_downloads"]["version_id"] = _prompt_non_empty("OS version_id", "")
+        else:
+            for key in ("package_id", "version_id"):
+                config["os_downloads"][key] = config["os_downloads"].get(key) or "local"
+            console.print(
+                "Local processing does not require OS credentials. "
+                "Package/version labels are retained or set to 'local'; "
+                "use real OS IDs before downloading or listing remotely."
+            )
 
         console.print("\n[bold]Paths[/bold]")
         work_dir = _prompt_non_empty(
@@ -175,6 +182,12 @@ def main(argv: list[str] | None = None) -> int:
             str(config.get("paths", {}).get("work_dir", "./data")),
         )
         config["paths"]["work_dir"] = work_dir
+        if not download_data:
+            overrides = config["paths"]["overrides"]
+            overrides["downloads_dir"] = _prompt_non_empty(
+                "Directory containing downloaded ZIP archives (relative to config file)",
+                str(overrides.get("downloads_dir") or ""),
+            )
 
         if _confirm("Configure advanced processing settings?", default_yes=False):
             config["processing"]["num_chunks"] = _prompt_int(
@@ -198,7 +211,7 @@ def main(argv: list[str] | None = None) -> int:
             elif "duckdb_memory_limit" in config["processing"]:
                 del config["processing"]["duckdb_memory_limit"]
 
-        if _confirm("Set up .env credentials now?", default_yes=True):
+        if download_data and _confirm("Set up .env credentials now?", default_yes=True):
             if env_out.exists() and not overwrite_env:
                 if _confirm(
                     f".env already exists at {env_out}. Overwrite with new credentials?",
@@ -237,6 +250,25 @@ def main(argv: list[str] | None = None) -> int:
             f"[yellow]•[/yellow] Skipped .env updates: [bold]{env_out}[/bold] "
             "(existing file left unchanged)"
         )
+
+    if not download_data:
+        console.print("\n[cyan]Next:[/cyan] process local archives with these Python API calls:")
+        console.print("from ukam_os_builder import run_from_config", markup=False)
+        stages = (
+            ("extract", "split", "flatfile")
+            if config["source"]["type"] == "abp"
+            else (
+                "extract",
+                "flatfile",
+            )
+        )
+        for stage in stages:
+            console.print(
+                f"run_from_config({str(config_out)!r}, step={stage!r}, check_api=False)",
+                markup=False,
+                soft_wrap=True,
+            )
+    elif not write_env:
         console.print(
             "[yellow]Next:[/yellow] add real values for OS_PROJECT_API_KEY and "
             "OS_PROJECT_API_SECRET in .env before running."

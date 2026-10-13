@@ -1,60 +1,64 @@
 from __future__ import annotations
 
+import zipfile
 from pathlib import Path
 from textwrap import dedent
 
 import duckdb
 import pytest
+import requests
 
-from ukam_os_builder import create_config_and_env, inspect_flatfile_variants, run_from_config
+from ukam_os_builder import inspect_flatfile_variants, run_from_config
 
 
 def _write_config(path: Path, content: str) -> None:
     path.write_text(dedent(content).strip() + "\n", encoding="utf-8")
 
 
-def test_package_root_exports_expected_symbols() -> None:
-    import ukam_os_builder as pkg
-
-    assert hasattr(pkg, "create_config_and_env")
-    assert hasattr(pkg, "run_from_config")
-    assert hasattr(pkg, "inspect_flatfile_variants")
-
-
-def test_package_root_create_and_run_from_config(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
+def test_configured_archive_path_feeds_next_stage(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setenv("OS_PROJECT_API_KEY", "key")
-    monkeypatch.setenv("OS_PROJECT_API_SECRET", "secret")
-
+    archives = tmp_path / "licensed" / "archives"
+    archives.mkdir(parents=True)
+    with zipfile.ZipFile(archives / "AddressBasePremium_local.zip", "w") as archive:
+        archive.writestr("local.csv", "15,I,1,77,CONFIG ROAD,,LONDON,,ENG,,,,\n")
     config_path = tmp_path / "config.yaml"
-    env_path = tmp_path / ".env"
-
-    create_config_and_env(
-        config_out=config_path,
-        env_out=env_path,
-        source="ngd",
-        package_id="16465",
-        version_id="104444",
+    _write_config(
+        config_path,
+        """
+        source:
+          type: abp
+        paths:
+          work_dir: ./work
+          overrides:
+            downloads_dir: ./licensed/archives
+            extracted_dir: ./staging/csv
+            parquet_dir: ./staging/parquet
+        os_downloads:
+          package_id: local
+          version_id: local
+        """,
     )
+    monkeypatch.setenv("OS_PROJECT_API_KEY", "test-key")
+    monkeypatch.setenv("OS_PROJECT_API_SECRET", "test-secret")
 
-    calls: dict[str, object] = {}
+    def reject_os_request(*_args: object, **_kwargs: object) -> None:
+        pytest.fail("Processing configured local inputs must not contact OS Data Hub")
 
-    monkeypatch.setattr("ukam_os_builder.api.api.get_package_version", lambda _settings: None)
+    monkeypatch.setattr(requests.sessions.Session, "request", reject_os_request)
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    monkeypatch.chdir(elsewhere)
 
-    def fake_run_pipeline(step: str, settings: object, force: bool, list_only: bool) -> None:
-        calls["step"] = step
-        calls["source"] = settings.source.type
-        calls["list_only"] = list_only
+    run_from_config(config_path, step="extract", check_api=False)
+    run_from_config(config_path, step="split", check_api=False)
 
-    monkeypatch.setattr("ukam_os_builder.api.api.run_pipeline", fake_run_pipeline)
-
-    run_from_config(config_path=config_path, step="download", list_only=True)
-
-    assert calls["step"] == "download"
-    assert calls["source"] == "ngd"
-    assert calls["list_only"] is True
+    with duckdb.connect() as con:
+        rows = con.execute(
+            "SELECT usrn, street_description FROM read_parquet(?)",
+            [str(tmp_path / "staging/parquet/raw/street_descriptor.parquet")],
+        ).fetchall()
+    assert rows == [(77, "CONFIG ROAD")]
 
 
 def test_package_root_inspect_flatfile_variants(tmp_path: Path) -> None:

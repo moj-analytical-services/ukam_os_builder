@@ -59,7 +59,7 @@ ukam-os-build --help
 ukam-os-setup --config-out config.yaml
 ```
 
-This writes `config.yaml` and, by default, `.env` placeholders if `.env` does not already exist. The setup flow asks which source to use (`ngd` or `abp`) and stores it in `config.yaml`.
+The wizard first asks whether to download from OS Data Hub or process previous downloads, then which source to use (`ngd` or `abp`). Continue below for downloads; for local archives, follow the printed Python API commands or [the local ABP instructions](#local-abp-data-without-os-downloads).
 
 2) Add real credentials
 
@@ -157,6 +157,99 @@ ukam-os-build --config config.yaml
 ukam-os-setup --source abp --config-out config.yaml --non-interactive --package-id <package_id> --version-id <version_id>
 ukam-os-build --config config.yaml
 ```
+
+## Local ABP data without OS downloads
+
+Local ABP data uses the same processing stages as downloaded data. Configure the input directory and skip the download stage.
+
+### Start from local archives
+
+Run `ukam-os-setup --config-out config.yaml`, answer **No** to downloading from OS Data Hub, select `abp` and enter the directory containing your ZIP archives. The wizard sets `paths.overrides.downloads_dir` and leaves `.env` unchanged.
+
+For an existing ABP config (`source.type: abp`), change the input path:
+
+```yaml
+paths:
+  work_dir: ./work
+  overrides:
+    downloads_dir: ./licensed/archives
+```
+
+ZIP files must be directly inside that directory. Paths are relative to `config.yaml`. Keep the other settings; package and version IDs must remain non-empty, but may both be `"local"` when unknown. These labels are not valid for OS downloads or remote listing.
+
+Run the existing processing stages through the public API:
+
+```python
+from ukam_os_builder import run_from_config
+
+run_from_config("config.yaml", step="extract", check_api=False)
+run_from_config("config.yaml", step="split", check_api=False)
+run_from_config("config.yaml", step="flatfile", check_api=False)
+```
+
+`check_api=False` disables the OS metadata preflight, even when credentials are present in the environment or `.env`. It does not disable the download stage or remote listing: do not select `all`, `download`, or `list_only=True` for this local-only workflow. The CLI does not expose `check_api`; use the Python API when no OS requests are permitted.
+
+### Start from already-extracted CSV
+
+Keep the source, download-label, and processing settings above, but replace `paths` with:
+
+```yaml
+paths:
+  work_dir: ./work
+  overrides:
+    extracted_dir: ./licensed/extracted
+```
+
+The input is native ABP CSV with mixed record types, without a column-header row. CSV files may be nested below the selected directory. Skip `extract` and run:
+
+```python
+from ukam_os_builder import run_from_config
+
+run_from_config("config.yaml", step="split", check_api=False)
+run_from_config("config.yaml", step="flatfile", check_api=False)
+```
+
+### Start from externally prepared Parquet
+
+If your integration already prepares the ABP tables, keep the same source, download-label, and processing settings and replace `paths` with:
+
+```yaml
+paths:
+  work_dir: ./work
+  overrides:
+    parquet_dir: ./prepared-abp
+```
+
+`parquet_dir` is the parent of `raw`, not the `raw` directory itself. Provide all six files:
+
+```text
+prepared-abp/
+└── raw/
+    ├── blpu.parquet
+    ├── lpi.parquet
+    ├── street_descriptor.parquet
+    ├── organisation.parquet
+    ├── delivery_point.parquet
+    └── classification.parquet
+```
+
+Each table must contain the columns and compatible types defined in [the ABP schema](ukam_os_builder/data_sources/abp/schemas/abp_schema.yaml). A table with no rows still needs a typed, empty Parquet file. Missing tables are errors, not a request to download or regenerate inputs.
+
+Run only the final stage:
+
+```python
+from ukam_os_builder import run_from_config
+
+run_from_config("config.yaml", step="flatfile", check_api=False)
+```
+
+This reads the prepared tables without rewriting them and creates `abp_for_uk_address_matcher.chunk_001_of_010.parquet` through `chunk_010_of_010.parquet` under `work/output`. Use `overwrite=True` on this call to regenerate existing final outputs; do not run `split` against externally owned prepared tables.
+
+### Snapshot and path boundaries
+
+- Relative paths are resolved against the directory containing `config.yaml`, not the Python process's working directory. Inputs and final output can have separate path overrides.
+- `split` separates record types and applies schema typing. Neither `split` nor `flatfile` applies ordered FULL plus COU changes. Do not combine FULL and COU archives and expect updates or deletions to be resolved.
+- Supply one consistent snapshot. If your integration owns current-state construction or cohort filtering, complete that before supplying prepared Parquet. Keep the linked BLPU, LPI, and street descriptor records needed for rendering, including parent relationships needed for hierarchy metadata.
 
 ## Pipeline stages
 
