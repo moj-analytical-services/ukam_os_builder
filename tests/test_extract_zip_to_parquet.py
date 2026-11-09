@@ -91,6 +91,29 @@ def test_ngd_converts_zip_members_without_extracting_csv(
     assert not list(settings.paths.extracted_dir.rglob("*.csv"))
 
 
+def test_ngd_royal_mail_preserves_alphanumeric_po_box_numbers(tmp_path: Path) -> None:
+    settings = _settings(tmp_path)
+    settings.processing.ngd_keep_all_columns = True
+    _write_zip(
+        settings.paths.downloads_dir / "add_gb_royalmailaddress.zip",
+        {
+            "add_gb_royalmailaddress.csv": (
+                "uprn,poboxnumber\n" + "1,123\n" * 1_100_000 + "2,A60\n3,00123\n"
+            ),
+        },
+    )
+
+    outputs = extract.run_extract_step(settings)
+
+    assert len(outputs) == 1
+    with duckdb.connect() as con:
+        assert con.execute(
+            "SELECT DISTINCT poboxnumber FROM read_parquet(?) ORDER BY poboxnumber",
+            [str(outputs[0])],
+        ).fetchall() == [("00123",), ("123",), ("A60",)]
+    assert _count_rows(outputs[0]) == 1_100_002
+
+
 def test_ngd_projected_sources_preserve_complete_fixture_build(tmp_path: Path) -> None:
     from ukam_os_builder.data_sources.ngd.to_flatfile import run_flatfile_step
 
