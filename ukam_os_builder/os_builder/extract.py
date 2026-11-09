@@ -191,6 +191,8 @@ def _copy_csv_source_to_parquet(
     # ZipExtFile is a sequential decompressor; concurrent CSV reads can corrupt
     # its shared stream. Keep the Parquet writer and ordinary CSV reads parallel.
     reader_options = ", parallel=false" if csv_source.startswith("zip://") else ""
+    if output_path.stem.lower() == "add_gb_royalmailaddress":
+        reader_options += ", types={'poboxnumber': 'VARCHAR'}"
     projection = "*"
     if (
         settings is not None
