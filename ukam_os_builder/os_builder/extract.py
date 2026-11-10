@@ -191,20 +191,39 @@ def _copy_csv_source_to_parquet(
     # ZipExtFile is a sequential decompressor; concurrent CSV reads can corrupt
     # its shared stream. Keep the Parquet writer and ordinary CSV reads parallel.
     reader_options = ", parallel=false" if csv_source.startswith("zip://") else ""
-    if output_path.stem.lower() == "add_gb_royalmailaddress":
-        reader_options += ", types={'poboxnumber': 'VARCHAR'}"
     projection = "*"
-    if (
-        settings is not None
-        and settings.source.type.lower() == "ngd"
-        and not settings.processing.ngd_keep_all_columns
-    ):
-        # Import here to avoid the consumer's dependency on this module's SQL helper.
-        from ukam_os_builder.data_sources.ngd.to_flatfile import SOURCE_COLUMNS_BY_STEM
+    parameters: list[object] = [csv_source]
+    ngd_source = (
+        settings.source.type.lower() == "ngd"
+        if settings is not None
+        else is_ngd_address_file(output_path.name)
+    )
+    if ngd_source:
+        from ukam_os_builder.data_sources.ngd.to_flatfile import (
+            SOURCE_COLUMNS_BY_STEM,
+            SOURCE_NUMERIC_TYPES,
+        )
 
-        columns = SOURCE_COLUMNS_BY_STEM.get(output_path.stem.lower())
-        if columns:
-            projection = "COLUMNS('(?i)^(" + "|".join(columns) + ")$')"
+        source_schema = con.execute(
+            f"DESCRIBE SELECT * FROM read_csv_auto(?, header=true, all_varchar=true, "
+            f"sample_size=2048{reader_options})",
+            [csv_source],
+        ).fetchall()
+        numeric_types = {
+            column: SOURCE_NUMERIC_TYPES[column.lower()]
+            for column, *_ in source_schema
+            if column.lower() in SOURCE_NUMERIC_TYPES
+        }
+        reader_options += ", header=true, all_varchar=true"
+        if numeric_types:
+            reader_options += ", types=?"
+            parameters.append(numeric_types)
+        if settings is not None and not settings.processing.ngd_keep_all_columns:
+            columns = SOURCE_COLUMNS_BY_STEM.get(output_path.stem.lower())
+            if columns:
+                projection = "COLUMNS('(?i)^(" + "|".join(columns) + ")$')"
+    else:
+        reader_options += ", sample_size=1000000"
 
     logger.debug("Converting %s -> %s", csv_source, output_path.name)
 
@@ -212,14 +231,14 @@ def _copy_csv_source_to_parquet(
         con.execute(
             f"""
             COPY (
-                SELECT {projection} FROM read_csv_auto(?, sample_size=1000000{reader_options})
+                SELECT {projection} FROM read_csv_auto(?{reader_options})
             ) TO '{_sql_string(temporary_path.as_posix())}' (
                 FORMAT 'PARQUET',
                 COMPRESSION '{_sql_string(compression)}',
                 COMPRESSION_LEVEL {compression_level}
             );
             """,
-            [csv_source],
+            parameters,
         )
         os.replace(temporary_path, output_path)
     except Exception:
