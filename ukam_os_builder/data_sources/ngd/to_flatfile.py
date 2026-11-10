@@ -58,7 +58,7 @@ ALTADD_STEMS = {
 }
 
 # Source fields consumed by the address and metadata views below. Keep names
-# case-insensitive and preserve source order/types when projecting during COPY.
+# case-insensitive and preserve source column order when projecting during COPY.
 CORE_SOURCE_COLUMNS = (
     "uprn",
     "fulladdress",
@@ -117,6 +117,15 @@ SOURCE_COLUMNS_BY_STEM = {
     **dict.fromkeys(CORE_FEATURE_STEMS, CORE_SOURCE_COLUMNS),
     **dict.fromkeys(ALTADD_STEMS, ALTADD_SOURCE_COLUMNS),
     "add_gb_royalmailaddress": ROYAL_MAIL_SOURCE_COLUMNS,
+}
+
+SOURCE_NUMERIC_TYPES = {
+    "uprn": "BIGINT",
+    "parentuprn": "BIGINT",
+    "rootuprn": "BIGINT",
+    "hierarchylevel": "INTEGER",
+    "lowestfloorlevel": "DOUBLE",
+    "highestfloorlevel": "DOUBLE",
 }
 
 # Priority order for metadata lookup (lower = higher priority)
