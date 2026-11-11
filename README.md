@@ -312,6 +312,11 @@ schema. Set `processing.ngd_keep_all_columns: true` if you also use other source
 columns, and rerun extraction with `--force` when changing this setting. Existing
 source Parquets are otherwise reused. Raw CSV extraction and ABP are unchanged.
 
+NGD conversion defaults columns to text, preserving alphanumeric values and leading
+zeros. UPRNs (including parent/root UPRNs), hierarchy levels and numeric floor bounds
+use explicit numeric types. Regenerate existing source Parquets with `--force` to
+apply this schema; changing the reader does not update cached files automatically.
+
 To change ABP status exclusions, set `processing.abp_excluded_logical_statuses`
 or pass `--abp-excluded-logical-statuses`.
 Valid values are `1` (approved), `3` (alternative), `6` (provisional), and `8` (historic).
@@ -429,7 +434,8 @@ Override keys replace derived defaults. Relative local paths are resolved relati
 
 ## Pre-commit security checks
 
-Install the development tools and enable the Git hook:
+The development tools require Python `3.11+`; the application still supports Python `3.10+`.
+Install the tools and enable the Git hook:
 
 ```bash
 uv sync --all-extras --all-groups
