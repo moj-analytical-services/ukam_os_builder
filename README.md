@@ -434,7 +434,8 @@ Override keys replace derived defaults. Relative local paths are resolved relati
 
 ## Pre-commit security checks
 
-Install the development tools and enable the Git hook:
+The development tools require Python `3.11+`; the application still supports Python `3.10+`.
+Install the tools and enable the Git hook:
 
 ```bash
 uv sync --all-extras --all-groups
