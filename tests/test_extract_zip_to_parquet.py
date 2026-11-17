@@ -91,6 +91,78 @@ def test_ngd_converts_zip_members_without_extracting_csv(
     assert not list(settings.paths.extracted_dir.rglob("*.csv"))
 
 
+def test_ngd_royal_mail_preserves_alphanumeric_po_box_numbers(tmp_path: Path) -> None:
+    settings = _settings(tmp_path)
+    settings.processing.ngd_keep_all_columns = True
+    _write_zip(
+        settings.paths.downloads_dir / "add_gb_royalmailaddress.zip",
+        {
+            "add_gb_royalmailaddress.csv": (
+                "uprn,poboxnumber\n" + "1,123\n" * 1_100_000 + "2,A60\n3,00123\n"
+            ),
+        },
+    )
+
+    outputs = extract.run_extract_step(settings)
+
+    assert len(outputs) == 1
+    with duckdb.connect() as con:
+        assert con.execute(
+            "SELECT DISTINCT poboxnumber FROM read_parquet(?) ORDER BY poboxnumber",
+            [str(outputs[0])],
+        ).fetchall() == [("00123",), ("123",), ("A60",)]
+    assert _count_rows(outputs[0]) == 1_100_002
+
+
+@pytest.mark.parametrize("direct_zip", [True, False])
+def test_ngd_uses_numeric_schema_and_preserves_other_columns_as_text(
+    tmp_path: Path, direct_zip: bool
+) -> None:
+    settings = _settings(tmp_path)
+    settings.processing.ngd_keep_all_columns = True
+    content = (
+        "UPRN,ParentUPRN,RootUPRN,HierarchyLevel,LowestFloorLevel,HighestFloorLevel,"
+        "BuildingNumber,NewField\n"
+        "123,100,100,2,-1,3.5,00123,00123\n"
+        "124,,,,,,A60,A60\n"
+    )
+    if direct_zip:
+        _write_zip(
+            settings.paths.downloads_dir / "add_gb_builtaddress.zip",
+            {"add_gb_builtaddress.csv": content},
+        )
+        outputs = extract.run_extract_step(settings)
+    else:
+        source = tmp_path / "add_gb_builtaddress.csv"
+        source.write_text(content)
+        outputs = [
+            extract.convert_csv_to_parquet(
+                source, tmp_path / "add_gb_builtaddress.parquet", settings=settings
+            )
+        ]
+
+    with duckdb.connect() as con:
+        result = con.read_parquet(str(outputs[0]))
+        assert [str(dtype) for dtype in result.types] == [
+            "BIGINT", "BIGINT", "BIGINT", "INTEGER", "DOUBLE", "DOUBLE", "VARCHAR", "VARCHAR"
+        ]
+        assert result.order("UPRN").fetchall() == [
+            (123, 100, 100, 2, -1.0, 3.5, "00123", "00123"),
+            (124, None, None, None, None, None, "A60", "A60"),
+        ]
+
+
+def test_ngd_rejects_invalid_numeric_metadata(tmp_path: Path) -> None:
+    settings = _settings(tmp_path)
+    source = tmp_path / "add_gb_builtaddress.csv"
+    source.write_text("uprn,fulladdress,parentuprn\n1,One Road,invalid\n")
+
+    with pytest.raises(duckdb.ConversionException, match="parentuprn"):
+        extract.convert_csv_to_parquet(
+            source, tmp_path / "add_gb_builtaddress.parquet", settings=settings
+        )
+
+
 def test_ngd_projected_sources_preserve_complete_fixture_build(tmp_path: Path) -> None:
     from ukam_os_builder.data_sources.ngd.to_flatfile import run_flatfile_step
 

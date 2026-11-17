@@ -22,6 +22,8 @@ jobs:
     if: github.ref == 'refs/heads/main'
     environment: os-e2e
     runs-on: ubuntu-latest
+    env:
+      UV_NO_DEV: "true"
     strategy:
       fail-fast: false
       matrix:
@@ -52,7 +54,7 @@ jobs:
           cache-dependency-glob: "uv.lock"
 
       - name: Install dependencies
-        run: uv sync --all-extras --all-groups --locked
+        run: uv sync --all-extras --locked
 
       - name: Write config.yaml
         env:
