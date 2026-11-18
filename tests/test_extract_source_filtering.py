@@ -118,3 +118,6 @@ def test_should_skip_ngd_download_uses_configured_exclusions() -> None:
         is True
     )
     assert _should_skip_ngd_download("add_gb_builtaddress.zip", settings) is False
+    assert _should_skip_ngd_download("add_isl_historicaddress.zip", settings) is True
+    assert _should_skip_ngd_download("add_isl_historicaddress_altadd.zip", settings) is True
+    assert _should_skip_ngd_download("add_isl_builtaddress.zip", settings) is False
