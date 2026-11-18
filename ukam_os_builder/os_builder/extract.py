@@ -7,7 +7,6 @@ import tempfile
 import zipfile
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
-from importlib import import_module
 from pathlib import Path
 
 import duckdb
@@ -468,14 +467,12 @@ def _convert_ngd_via_disk(
     cpu_count = (
         len(os.sched_getaffinity(0)) if hasattr(os, "sched_getaffinity") else os.cpu_count()
     ) or 1
-    try:
-        rapidgzip = import_module("rapidgzip")
-    except (ImportError, OSError):
-        rapidgzip = None
+    rapidgzip = shutil.which("rapidgzip")
+    if rapidgzip is None:
         max_workers = min(cpu_count, max(2, cpu_count // 4))
         logger.info(
             "Decompressing each NGD ZIP member on one core. Install rapidgzip in this Python "
-            "environment (python -m pip install rapidgzip) to use %d decoder threads per member "
+            "environment (python -m pip install rapidgzip) and put its command on PATH to use %d decoder threads per member "
             "in disk mode.",
             DECODER_THREADS,
         )
@@ -635,7 +632,8 @@ def run_extract_step(
 
         logger.info(
             "Streaming NGD ZIP members directly to Parquet. Set processing.ngd_extract_to_disk "
-            "to true to extract temporary CSVs for faster parallel extraction and parsing. "
+            "to true to extract temporary CSVs for parallel extraction and parsing. "
+            "Install rapidgzip for parallel decompression within each ZIP member. "
             "That mode uses substantially more local disk space."
         )
         parquet_files: list[Path] = []

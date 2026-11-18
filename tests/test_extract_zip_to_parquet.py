@@ -2,10 +2,11 @@ from __future__ import annotations
 
 import csv
 import io
+import shutil
+import subprocess
 import zipfile
 from pathlib import Path
 from threading import Barrier
-from types import SimpleNamespace
 
 import duckdb
 import pytest
@@ -17,6 +18,7 @@ from ukam_os_builder.api.settings import (
     Settings,
     SourceSettings,
 )
+from ukam_os_builder.data_sources.ngd import parallel_zip
 from ukam_os_builder.data_sources.ngd.to_flatfile import run_flatfile_step
 from ukam_os_builder.os_builder import extract
 
@@ -273,12 +275,11 @@ def test_ngd_converts_only_selected_zip_members(
             barrier.wait()
         return original_open(archive, name, *args, **kwargs)
 
-    def missing_rapidgzip(name: str):
+    def missing_rapidgzip(name: str) -> None:
         assert name == "rapidgzip"
-        assert extract_to_disk, "The default streaming mode should not load rapidgzip"
-        raise ModuleNotFoundError(name)
+        assert extract_to_disk, "The default streaming mode should not look up rapidgzip"
 
-    monkeypatch.setattr(extract, "import_module", missing_rapidgzip)
+    monkeypatch.setattr(extract.shutil, "which", missing_rapidgzip)
     monkeypatch.setattr(extract.os, "sched_getaffinity", lambda _: set(range(8)), raising=False)
     monkeypatch.setattr(zipfile.ZipFile, "open", open_consumed_member)
     with caplog.at_level("INFO"):
@@ -323,34 +324,44 @@ def test_ngd_disk_decompresses_members_with_16_decoder_threads(
         with archive.open(f"{stem}.csv", "w", force_zip64=True) as member:
             member.write(b'uprn,fulladdress\n1,"First line\nSecond line"\n')
 
-    if not decoder_fails:
-        rapidgzip = pytest.importorskip("rapidgzip")
+    command = shutil.which("rapidgzip")
+    if command is None and not decoder_fails:
+        pytest.skip("rapidgzip CLI is unavailable")
+    monkeypatch.setattr(extract.shutil, "which", lambda _: command or "rapidgzip")
 
-    class FailingDecoder(io.BytesIO):
-        def read(self, size=-1):
-            if self.tell():
-                raise ValueError("test decoder failed after emitting a prefix")
-            return super().read(size)
+    commands = []
+    original_run = subprocess.run
 
-    thread_counts = []
-
-    def open_decoder(file, *, parallelization):
-        thread_counts.append(parallelization)
+    def run_decoder(args, **kwargs):
+        commands.append(args)
         if decoder_fails:
-            return FailingDecoder(b"incorrect prefix")
-        return rapidgzip.open(file, parallelization=parallelization)
+            Path(args[args.index("--output") + 1]).write_bytes(b"incorrect prefix")
+            return subprocess.CompletedProcess(args, 1, stderr=b"test decoder failed")
+        return original_run(args, **kwargs)
 
-    monkeypatch.setattr(extract, "import_module", lambda _: SimpleNamespace(open=open_decoder))
+    monkeypatch.setattr(parallel_zip.subprocess, "run", run_decoder)
     [output] = extract.run_extract_step(settings)
 
-    assert thread_counts == [16]
+    [args] = commands
+    assert args[args.index("--decoder-parallelism") + 1] == "16"
+    assert "--verify" in args
     assert ("Retrying with the standard ZIP reader" in caplog.text) == decoder_fails
     with duckdb.connect() as con:
         assert con.read_parquet(str(output)).fetchall() == [(1, "First line\nSecond line")]
     assert not list(settings.paths.extracted_dir.rglob("*.csv"))
 
 
-def test_ngd_disk_extraction_cleans_up_after_crc_failure(tmp_path: Path) -> None:
+@pytest.mark.parametrize("use_rapidgzip", [False, True], ids=["zipfile", "rapidgzip"])
+def test_ngd_disk_extraction_cleans_up_after_crc_failure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    use_rapidgzip: bool,
+) -> None:
+    command = shutil.which("rapidgzip") if use_rapidgzip else None
+    if use_rapidgzip and command is None:
+        pytest.skip("rapidgzip CLI is unavailable")
+    monkeypatch.setattr(extract.shutil, "which", lambda _: command)
     settings = _settings(tmp_path)
     settings.processing.ngd_extract_to_disk = True
     archive = settings.paths.downloads_dir / "add_isl_builtaddress.zip"
@@ -363,6 +374,8 @@ def test_ngd_disk_extraction_cleans_up_after_crc_failure(tmp_path: Path) -> None
     with pytest.raises(zipfile.BadZipFile, match="CRC"):
         extract.run_extract_step(settings)
 
+    if use_rapidgzip:
+        assert "Mismatching CRC32" in caplog.text
     assert not list(settings.paths.extracted_dir.iterdir())
 
 
@@ -419,7 +432,14 @@ def test_ngd_uses_numeric_schema_and_preserves_other_columns_as_text(
     with duckdb.connect() as con:
         result = con.read_parquet(str(outputs[0]))
         assert [str(dtype) for dtype in result.types] == [
-            "BIGINT", "BIGINT", "BIGINT", "INTEGER", "DOUBLE", "DOUBLE", "VARCHAR", "VARCHAR"
+            "BIGINT",
+            "BIGINT",
+            "BIGINT",
+            "INTEGER",
+            "DOUBLE",
+            "DOUBLE",
+            "VARCHAR",
+            "VARCHAR",
         ]
         assert result.order("UPRN").fetchall() == [
             (123, 100, 100, 2, -1.0, 3.5, "00123", "00123"),
@@ -439,7 +459,6 @@ def test_ngd_rejects_invalid_numeric_metadata(tmp_path: Path) -> None:
 
 
 def test_ngd_projected_sources_preserve_complete_fixture_build(tmp_path: Path) -> None:
-    from ukam_os_builder.data_sources.ngd.to_flatfile import run_flatfile_step
 
     fixture_dir = Path(__file__).parent / "data"
     fixture_sources = {csv.stem: csv.read_text() for csv in fixture_dir.glob("*.csv")}
