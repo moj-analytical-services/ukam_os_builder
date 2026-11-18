@@ -275,7 +275,7 @@ def test_ngd_converts_only_selected_zip_members(
             barrier.wait()
         return original_open(archive, name, *args, **kwargs)
 
-    def missing_rapidgzip(name: str) -> None:
+    def missing_rapidgzip(name: str, **kwargs) -> None:
         assert name == "rapidgzip"
         assert extract_to_disk, "The default streaming mode should not look up rapidgzip"
 
@@ -308,15 +308,27 @@ def test_ngd_converts_only_selected_zip_members(
     assert not list(settings.paths.extracted_dir.glob(".ngd-extract-*"))
 
 
-@pytest.mark.parametrize("decoder_fails", [False, True], ids=["rapidgzip", "retry"])
-def test_ngd_disk_decompresses_members_with_16_decoder_threads(
+@pytest.mark.parametrize(
+    ("decoder_fails", "stage_in_ram"),
+    [(False, False), (True, False), (False, True)],
+    ids=["disk", "disk-retry", "ram"],
+)
+def test_ngd_staged_decompression(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
     decoder_fails: bool,
+    stage_in_ram: bool,
 ) -> None:
     settings = _settings(tmp_path)
-    settings.processing.ngd_extract_to_disk = True
+    settings.processing.ngd_extract_to_disk = not stage_in_ram
+    assert settings.processing.ngd_stage_csv_in_ram is False
+    settings.processing.ngd_stage_csv_in_ram = stage_in_ram
+    ram_root = tmp_path / "shm"
+    ram_root.mkdir()
+    monkeypatch.setattr(extract, "_RAM_STAGING_DIR", ram_root)
+    monkeypatch.setattr(Path, "is_mount", lambda path: path == ram_root)
+    monkeypatch.setattr(extract.os, "sched_getaffinity", lambda _: set(range(32)), raising=False)
     stem = "add_isl_builtaddress"
     path = settings.paths.downloads_dir / f"{stem}.zip"
     with zipfile.ZipFile(path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
@@ -327,7 +339,7 @@ def test_ngd_disk_decompresses_members_with_16_decoder_threads(
     command = shutil.which("rapidgzip")
     if command is None and not decoder_fails:
         pytest.skip("rapidgzip CLI is unavailable")
-    monkeypatch.setattr(extract.shutil, "which", lambda _: command or "rapidgzip")
+    monkeypatch.setattr(extract.shutil, "which", lambda *args, **kwargs: command or "rapidgzip")
 
     commands = []
     original_run = subprocess.run
@@ -343,8 +355,12 @@ def test_ngd_disk_decompresses_members_with_16_decoder_threads(
     [output] = extract.run_extract_step(settings)
 
     [args] = commands
-    assert args[args.index("--decoder-parallelism") + 1] == "16"
+    assert args[args.index("--decoder-parallelism") + 1] == ("32" if stage_in_ram else "16")
     assert "--verify" in args
+    csv_path = Path(args[args.index("--output") + 1])
+    assert csv_path.is_relative_to(ram_root if stage_in_ram else settings.paths.extracted_dir)
+    assert Path(args[-1]).is_relative_to(settings.paths.extracted_dir)
+    assert not list(ram_root.iterdir())
     assert ("Retrying with the standard ZIP reader" in caplog.text) == decoder_fails
     with duckdb.connect() as con:
         assert con.read_parquet(str(output)).fetchall() == [(1, "First line\nSecond line")]
@@ -361,7 +377,7 @@ def test_ngd_disk_extraction_cleans_up_after_crc_failure(
     command = shutil.which("rapidgzip") if use_rapidgzip else None
     if use_rapidgzip and command is None:
         pytest.skip("rapidgzip CLI is unavailable")
-    monkeypatch.setattr(extract.shutil, "which", lambda _: command)
+    monkeypatch.setattr(extract.shutil, "which", lambda *args, **kwargs: command)
     settings = _settings(tmp_path)
     settings.processing.ngd_extract_to_disk = True
     archive = settings.paths.downloads_dir / "add_isl_builtaddress.zip"

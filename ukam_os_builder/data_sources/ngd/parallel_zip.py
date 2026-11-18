@@ -36,7 +36,13 @@ def _write_gzip_member(archive_path: Path, info: zipfile.ZipInfo, gzip_path: Pat
 
 
 def copy_zip_member(
-    archive_path: Path, member_name: str, csv_path: Path, rapidgzip: str | None
+    archive_path: Path,
+    member_name: str,
+    csv_path: Path,
+    rapidgzip: str | None,
+    *,
+    scratch: Path,
+    decoder_threads: int,
 ) -> None:
     """Write and verify a single member in a worker's temporary directory."""
     with zipfile.ZipFile(archive_path) as archive:
@@ -44,7 +50,7 @@ def copy_zip_member(
         # Opening with zipfile validates the local header and ZIP member bounds.
         with archive.open(info) as serial:
             if rapidgzip is not None and info.compress_type == zipfile.ZIP_DEFLATED:
-                gzip_path = csv_path.with_suffix(".gz")
+                gzip_path = scratch / "member.gz"
                 try:
                     _write_gzip_member(archive_path, info, gzip_path)
                     process = subprocess.run(
@@ -53,7 +59,7 @@ def copy_zip_member(
                             "--decompress",
                             "--verify",
                             "--decoder-parallelism",
-                            str(DECODER_THREADS),
+                            str(decoder_threads),
                             "--output",
                             str(csv_path),
                             str(gzip_path),

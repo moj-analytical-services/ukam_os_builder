@@ -115,6 +115,7 @@ class ProcessingSettings(StrictBaseModel):
     ngd_excluded_stems: list[str] = Field(default_factory=lambda: list(DEFAULT_NGD_EXCLUDED_STEMS))
     ngd_keep_all_columns: bool = False
     ngd_extract_to_disk: bool = False
+    ngd_stage_csv_in_ram: bool = False
     abp_excluded_logical_statuses: list[int] = Field(
         default_factory=lambda: list(DEFAULT_ABP_EXCLUDED_LOGICAL_STATUSES)
     )

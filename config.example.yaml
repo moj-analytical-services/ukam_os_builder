@@ -53,6 +53,7 @@ processing:
   # Allow local disk space for several full uncompressed CSVs and DuckDB spill files.
   # Install rapidgzip to decompress each DEFLATE member with 16 threads in this mode.
   ngd_extract_to_disk: false
+  ngd_stage_csv_in_ram: false
   # Parquet compression settings
   parquet_compression: zstd
   parquet_compression_level: 9

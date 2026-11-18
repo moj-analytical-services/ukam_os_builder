@@ -394,6 +394,7 @@ processing:
   num_chunks: 10
   sort_output_by_postcode: false
   ngd_extract_to_disk: false
+  ngd_stage_csv_in_ram: false
   ngd_excluded_stems:
     - historicaddress
   abp_excluded_logical_statuses:
@@ -404,6 +405,8 @@ processing:
 `parquet_compression` and `parquet_compression_level` apply to intermediate and final Parquet files. Set `sort_output_by_postcode: true` to sort each final NGD chunk by postcode and `unique_id`; this can reduce file size but requires additional sorting work.
 
 NGD streams ZIP members directly to Parquet by default. To opt into parallel extraction and CSV parsing, set `processing.ngd_extract_to_disk: true`. Install rapidgzip with `python -m pip install rapidgzip` and make sure its command is on `PATH` to use 16 decoder threads per DEFLATE member. The extraction stages a temporary gzip copy of each active compressed member and a temporary CSV on local disk. Rapidgzip verifies the member CRC32 during decompression. The standard ZIP reader handles extraction if rapidgzip is unavailable or fails.
+
+On Linux, set `processing.ngd_stage_csv_in_ram: true` to opt into staged extraction with one CSV at a time in `/dev/shm`. This mode requires rapidgzip on `PATH` and uses all available CPUs for decoding each member. Allow enough free space in `/dev/shm` for the largest uncompressed member. The temporary compressed copy, Parquet files and DuckDB spill remain on local disk.
 
 With a local base, the tool creates these directories under `paths.work_dir`:
 

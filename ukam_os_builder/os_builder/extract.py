@@ -3,9 +3,11 @@ from __future__ import annotations
 import logging
 import os
 import shutil
+import sys
 import tempfile
 import zipfile
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from contextlib import nullcontext
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -21,6 +23,7 @@ from ukam_os_builder.data_sources.ngd.ngd_exclusions import (
 from ukam_os_builder.data_sources.ngd.parallel_zip import DECODER_THREADS, copy_zip_member
 
 logger = logging.getLogger(__name__)
+_RAM_STAGING_DIR = Path("/dev/shm")
 
 
 class ZipStreamError(RuntimeError):
@@ -467,8 +470,29 @@ def _convert_ngd_via_disk(
     cpu_count = (
         len(os.sched_getaffinity(0)) if hasattr(os, "sched_getaffinity") else os.cpu_count()
     ) or 1
-    rapidgzip = shutil.which("rapidgzip")
-    if rapidgzip is None:
+    executable_dirs = os.pathsep.join(
+        (str(Path(sys.executable).parent), os.environ.get("PATH", os.defpath))
+    )
+    rapidgzip = shutil.which("rapidgzip", path=executable_dirs)
+    stage_in_ram = settings.processing.ngd_stage_csv_in_ram
+    decoder_threads = cpu_count if stage_in_ram else DECODER_THREADS
+    if stage_in_ram:
+        if rapidgzip is None:
+            raise ValueError("NGD RAM staging requires the rapidgzip command on PATH")
+        if not _RAM_STAGING_DIR.is_mount():
+            raise ValueError("NGD RAM staging requires /dev/shm to be mounted as tmpfs")
+        largest_csv = max(member.uncompressed_size for _, member in pending)
+        if shutil.disk_usage(_RAM_STAGING_DIR).free < largest_csv:
+            raise ValueError(
+                f"NGD RAM staging needs at least {largest_csv:,} free bytes in /dev/shm"
+            )
+        max_workers = 1
+        logger.info(
+            "Staging one NGD CSV at a time in %s with %d rapidgzip decoder threads.",
+            _RAM_STAGING_DIR,
+            decoder_threads,
+        )
+    elif rapidgzip is None:
         max_workers = min(cpu_count, max(2, cpu_count // 4))
         logger.info(
             "Decompressing each NGD ZIP member on one core. Install rapidgzip in this Python "
@@ -493,17 +517,33 @@ def _convert_ngd_via_disk(
             prefix=".ngd-extract-", dir=settings.paths.extracted_dir
         ) as temporary_dir:
             scratch = Path(temporary_dir)
-            csv_path = scratch / "source.csv"
-            copy_zip_member(archive_path, member.name, csv_path, rapidgzip)
-
-            with create_duckdb_connection(
-                settings,
-                config={"threads": threads_per_worker, "temp_directory": str(scratch / "spill")},
-            ) as con:
-                _share_duckdb_memory_limit(con, workers)
-                _copy_csv_source_to_parquet(
-                    con, csv_path.as_posix(), member.output_path, force, settings
+            csv_directory = (
+                tempfile.TemporaryDirectory(prefix="ukam-ngd-", dir=_RAM_STAGING_DIR)
+                if stage_in_ram
+                else nullcontext(temporary_dir)
+            )
+            with csv_directory as csv_dir:
+                csv_path = Path(csv_dir) / "source.csv"
+                copy_zip_member(
+                    archive_path,
+                    member.name,
+                    csv_path,
+                    rapidgzip,
+                    scratch=scratch,
+                    decoder_threads=decoder_threads,
                 )
+
+                with create_duckdb_connection(
+                    settings,
+                    config={
+                        "threads": threads_per_worker,
+                        "temp_directory": str(scratch / "spill"),
+                    },
+                ) as con:
+                    _share_duckdb_memory_limit(con, workers)
+                    _copy_csv_source_to_parquet(
+                        con, csv_path.as_posix(), member.output_path, force, settings
+                    )
 
     # Starting with the largest members reduces the time waiting for the last job.
     pending.sort(key=lambda job: job[1].uncompressed_size, reverse=True)
@@ -625,7 +665,7 @@ def run_extract_step(
                 output_owners[member.output_path] = (zip_path, member.name)
             archive_members.append((zip_path, members))
 
-        if settings.processing.ngd_extract_to_disk:
+        if settings.processing.ngd_extract_to_disk or settings.processing.ngd_stage_csv_in_ram:
             parquet_files = _convert_ngd_via_disk(archive_members, settings, force)
             logger.info("Extraction complete: %d parquet files", len(parquet_files))
             return parquet_files
@@ -634,6 +674,7 @@ def run_extract_step(
             "Streaming NGD ZIP members directly to Parquet. Set processing.ngd_extract_to_disk "
             "to true to extract temporary CSVs for parallel extraction and parsing. "
             "Install rapidgzip for parallel decompression within each ZIP member. "
+            "Set processing.ngd_stage_csv_in_ram to true to stage CSVs in RAM with all available decoder threads. "
             "That mode uses substantially more local disk space."
         )
         parquet_files: list[Path] = []

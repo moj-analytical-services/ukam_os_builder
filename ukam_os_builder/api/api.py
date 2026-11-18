@@ -58,6 +58,7 @@ def _default_config() -> dict[str, object]:
             "sort_output_by_postcode": True,
             "num_chunks": 10,
             "ngd_extract_to_disk": False,
+            "ngd_stage_csv_in_ram": False,
             "ngd_excluded_stems": list(DEFAULT_NGD_EXCLUDED_STEMS),
             "abp_excluded_logical_statuses": list(DEFAULT_ABP_EXCLUDED_LOGICAL_STATUSES),
         },
@@ -209,6 +210,7 @@ def render_annotated_config(config: dict[str, object]) -> str:
         "processing:\n"
         "  # Enable parallel NGD extraction and CSV parsing using much more local disk space\n"
         f"  ngd_extract_to_disk: {str(processing.get('ngd_extract_to_disk', False)).lower()}\n"
+        f"  ngd_stage_csv_in_ram: {str(processing.get('ngd_stage_csv_in_ram', False)).lower()}\n"
         "  # Parquet compression codec for intermediate/final files\n"
         f"  parquet_compression: {processing['parquet_compression']}\n"
         "  # Compression level (higher usually means smaller files but slower writes)\n"
