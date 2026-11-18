@@ -403,16 +403,19 @@ def load_settings(
         ) from exc
 
 
-def create_duckdb_connection(settings: Settings) -> duckdb.DuckDBPyConnection:
+def create_duckdb_connection(
+    settings: Settings, *, config: dict[str, Any] | None = None
+) -> duckdb.DuckDBPyConnection:
     """Create a DuckDB connection with optional memory limit applied.
 
     Args:
         settings: Settings object containing processing configuration.
+        config: Optional DuckDB connection options.
 
     Returns:
         DuckDB connection with memory limit applied if configured.
     """
-    con = duckdb.connect()
+    con = duckdb.connect(config=config or {})
 
     # Apply memory limit if configured
     if settings.processing.duckdb_memory_limit:
