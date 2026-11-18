@@ -4,21 +4,22 @@ from collections.abc import Iterable
 from pathlib import Path
 from typing import Any
 
-NGD_CORE_FILE_STEM_BY_EXCLUSION = {
-    "builtaddress": "add_gb_builtaddress",
-    "prebuildaddress": "add_gb_prebuildaddress",
-    "historicaddress": "add_gb_historicaddress",
-    "nonaddressableobject": "add_gb_nonaddressableobject",
-    "royalmailaddress": "add_gb_royalmailaddress",
-}
+NGD_ADDRESS_PREFIXES = ("add_gb_", "add_isl_")
+NGD_EXCLUDABLE_FEATURES = (
+    "builtaddress",
+    "prebuildaddress",
+    "historicaddress",
+    "nonaddressableobject",
+    "royalmailaddress",
+)
 
-VALID_NGD_EXCLUDED_STEMS = frozenset(NGD_CORE_FILE_STEM_BY_EXCLUSION)
+VALID_NGD_EXCLUDED_STEMS = frozenset(NGD_EXCLUDABLE_FEATURES)
 DEFAULT_NGD_EXCLUDED_STEMS = ("historicaddress",)
 
 
 def format_valid_ngd_excluded_stems() -> str:
     """Return valid NGD exclusion options for error messages and help text."""
-    return ", ".join(NGD_CORE_FILE_STEM_BY_EXCLUSION)
+    return ", ".join(NGD_EXCLUDABLE_FEATURES)
 
 
 def normalise_ngd_excluded_stems(values: Iterable[Any] | None) -> list[str]:
@@ -67,7 +68,7 @@ def get_configured_ngd_excluded_stems(settings: Any) -> list[str]:
 
 def is_ngd_address_file(name: str) -> bool:
     """Return True when a path name looks like an NGD address feature file."""
-    return Path(name).name.lower().startswith("add_gb_")
+    return Path(name).name.lower().startswith(NGD_ADDRESS_PREFIXES)
 
 
 def ngd_file_matches_excluded_stem(
@@ -76,18 +77,14 @@ def ngd_file_matches_excluded_stem(
 ) -> bool:
     """Return True when an NGD file name matches configured exclusions.
 
-    Feature options match the core feature file and its alternate-address file,
-    so ``builtaddress`` matches both ``add_gb_builtaddress`` and
-    ``add_gb_builtaddress_altadd``.
+    Feature options match the core and alternate-address files for GB and Islands.
     """
     excluded = set(normalise_ngd_excluded_stems(excluded_stems))
     if not excluded:
         return False
 
     file_stem = Path(name).stem.lower()
-
-    return any(
-        file_stem in {ngd_file_stem, f"{ngd_file_stem}_altadd"}
-        for excluded_stem, ngd_file_stem in NGD_CORE_FILE_STEM_BY_EXCLUSION.items()
-        if excluded_stem in excluded
-    )
+    for prefix in NGD_ADDRESS_PREFIXES:
+        if file_stem.startswith(prefix):
+            return file_stem.removeprefix(prefix).removesuffix("_altadd") in excluded
+    return False

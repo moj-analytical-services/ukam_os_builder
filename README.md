@@ -400,7 +400,7 @@ processing:
   # duckdb_memory_limit: "8GB"
 ```
 
-`parquet_compression` and `parquet_compression_level` apply to intermediate and final Parquet files. Set `sort_output_by_postcode: true` to sort each final NGD chunk by postcode and `unique_id`; this can reduce file size but requires additional sorting work.
+`parquet_compression` and `parquet_compression_level` apply to intermediate and final Parquet files. Set `sort_output_by_postcode: true` to sort each final NGD chunk by postcode and `unique_id`; this can reduce file size but requires additional sorting work. This controls output order, not which record is kept when deduplication priorities tie.
 
 With a local base, the tool creates these directories under `paths.work_dir`:
 
