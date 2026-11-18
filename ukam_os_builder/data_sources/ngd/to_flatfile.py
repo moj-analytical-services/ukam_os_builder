@@ -20,6 +20,7 @@ import duckdb
 from ukam_os_builder._exceptions import ToFlatfileError
 from ukam_os_builder.api.settings import Settings
 from ukam_os_builder.data_sources.ngd.ngd_exclusions import (
+    NGD_ADDRESS_PREFIXES,
     get_configured_ngd_excluded_stems,
     ngd_file_matches_excluded_stem,
 )
@@ -28,33 +29,27 @@ from ukam_os_builder.os_builder.output import Writer, build_writer
 logger = logging.getLogger(__name__)
 
 
-# Mapping of file stems to feature types
+# Core features in metadata lookup priority order.
+CORE_FEATURE_TYPES = {
+    "builtaddress": "Built Address",
+    "prebuildaddress": "Pre-Build Address",
+    "nonaddressableobject": "Non-Addressable Object",
+    "historicaddress": "Historic Address",
+}
+CORE_FEATURE_TYPE_BY_STEM = {
+    f"{prefix}{feature}": label
+    for prefix in NGD_ADDRESS_PREFIXES
+    for feature, label in CORE_FEATURE_TYPES.items()
+}
+ALTADD_FEATURE_TYPE_BY_STEM = {
+    f"{stem}_altadd": label for stem, label in CORE_FEATURE_TYPE_BY_STEM.items()
+}
+ROYAL_MAIL_STEMS = {f"{prefix}royalmailaddress" for prefix in NGD_ADDRESS_PREFIXES}
+BUILT_ADDRESS_STEMS = {f"{prefix}builtaddress" for prefix in NGD_ADDRESS_PREFIXES}
 FEATURE_TYPE_BY_STEM = {
-    "add_gb_builtaddress": "Built Address",
-    "add_gb_builtaddress_altadd": "Built Address",
-    "add_gb_historicaddress": "Historic Address",
-    "add_gb_historicaddress_altadd": "Historic Address",
-    "add_gb_nonaddressableobject": "Non-Addressable Object",
-    "add_gb_nonaddressableobject_altadd": "Non-Addressable Object",
-    "add_gb_prebuildaddress": "Pre-Build Address",
-    "add_gb_prebuildaddress_altadd": "Pre-Build Address",
-    "add_gb_royalmailaddress": "Royal Mail Address",
-}
-
-# Core feature stems (contain fulladdress and classification fields)
-CORE_FEATURE_STEMS = {
-    "add_gb_builtaddress",
-    "add_gb_historicaddress",
-    "add_gb_nonaddressableobject",
-    "add_gb_prebuildaddress",
-}
-
-# Alternate address stems (no classification fields)
-ALTADD_STEMS = {
-    "add_gb_builtaddress_altadd",
-    "add_gb_historicaddress_altadd",
-    "add_gb_nonaddressableobject_altadd",
-    "add_gb_prebuildaddress_altadd",
+    **CORE_FEATURE_TYPE_BY_STEM,
+    **ALTADD_FEATURE_TYPE_BY_STEM,
+    **dict.fromkeys(ROYAL_MAIL_STEMS, "Royal Mail Address"),
 }
 
 # Source fields consumed by the address and metadata views below. Keep names
@@ -70,7 +65,6 @@ CORE_SOURCE_COLUMNS = (
     "floorlevel",
     "lowestfloorlevel",
     "highestfloorlevel",
-    "description",
     "addressstatus",
     "buildstatus",
     "alternatelanguage",
@@ -114,9 +108,9 @@ ROYAL_MAIL_SOURCE_COLUMNS = (
     "welshposttown",
 )
 SOURCE_COLUMNS_BY_STEM = {
-    **dict.fromkeys(CORE_FEATURE_STEMS, CORE_SOURCE_COLUMNS),
-    **dict.fromkeys(ALTADD_STEMS, ALTADD_SOURCE_COLUMNS),
-    "add_gb_royalmailaddress": ROYAL_MAIL_SOURCE_COLUMNS,
+    **dict.fromkeys(CORE_FEATURE_TYPE_BY_STEM, CORE_SOURCE_COLUMNS),
+    **dict.fromkeys(ALTADD_FEATURE_TYPE_BY_STEM, ALTADD_SOURCE_COLUMNS),
+    **dict.fromkeys(ROYAL_MAIL_STEMS, ROYAL_MAIL_SOURCE_COLUMNS),
 }
 
 SOURCE_NUMERIC_TYPES = {
@@ -130,16 +124,15 @@ SOURCE_NUMERIC_TYPES = {
 
 # Priority order for metadata lookup (lower = higher priority)
 CORE_FEATURE_PRIORITY = {
-    "add_gb_builtaddress": 1,
-    "add_gb_prebuildaddress": 2,
-    "add_gb_nonaddressableobject": 3,
-    "add_gb_historicaddress": 4,
+    f"{prefix}{feature}": priority
+    for priority, feature in enumerate(CORE_FEATURE_TYPES, start=1)
+    for prefix in NGD_ADDRESS_PREFIXES
 }
 
 
 def _create_metadata_lookup_view(
     con: duckdb.DuckDBPyConnection,
-    parquet_dir: Path,
+    parquet_files: list[Path],
     uprn_predicate: str | None = None,
 ) -> None:
     """Create a lookup view with metadata from all core feature files.
@@ -152,27 +145,38 @@ def _create_metadata_lookup_view(
 
     Args:
         con: DuckDB connection.
-        parquet_dir: Directory containing parquet files.
+        parquet_files: Eligible parquet files for this build.
         uprn_predicate: Optional predicate for hash-based chunking.
     """
     where_clause = f"WHERE {uprn_predicate}" if uprn_predicate else ""
 
     # Build UNION ALL of all core files that exist
     union_parts = []
-    for stem, priority in sorted(CORE_FEATURE_PRIORITY.items(), key=lambda x: x[1]):
-        parquet_path = parquet_dir / f"{stem}.parquet"
-        if parquet_path.exists():
-            union_parts.append(f"""
+    built_parts = []
+    for parquet_path in parquet_files:
+        stem = parquet_path.stem.lower()
+        if stem not in CORE_FEATURE_PRIORITY:
+            continue
+        union_parts.append(f"""
+            SELECT
+                CAST(uprn AS BIGINT) AS uprn,
+                CAST(classificationcode AS VARCHAR) AS classificationcode,
+                CAST(parentuprn AS BIGINT) AS parentuprn,
+                CAST(rootuprn AS BIGINT) AS rootuprn,
+                CAST(hierarchylevel AS INTEGER) AS hierarchylevel,
+                CAST(floorlevel AS VARCHAR) AS floorlevel,
+                CAST(lowestfloorlevel AS DOUBLE) AS lowestfloorlevel,
+                CAST(highestfloorlevel AS DOUBLE) AS highestfloorlevel,
+                {CORE_FEATURE_PRIORITY[stem]} AS source_priority,
+                '{stem}' AS source_stem
+            FROM read_parquet('{parquet_path.as_posix()}')
+            {where_clause}
+        """)
+        if stem in BUILT_ADDRESS_STEMS:
+            built_parts.append(f"""
                 SELECT
                     CAST(uprn AS BIGINT) AS uprn,
-                    CAST(classificationcode AS VARCHAR) AS classificationcode,
-                    CAST(parentuprn AS BIGINT) AS parentuprn,
-                    CAST(rootuprn AS BIGINT) AS rootuprn,
-                    CAST(hierarchylevel AS INTEGER) AS hierarchylevel,
-                    CAST(floorlevel AS VARCHAR) AS floorlevel,
-                    CAST(lowestfloorlevel AS DOUBLE) AS lowestfloorlevel,
-                    CAST(highestfloorlevel AS DOUBLE) AS highestfloorlevel,
-                    {priority} AS source_priority
+                    CAST(lowertierlocalauthoritygsscode AS VARCHAR) AS lowertierlocalauthoritygsscode
                 FROM read_parquet('{parquet_path.as_posix()}')
                 {where_clause}
             """)
@@ -205,7 +209,7 @@ def _create_metadata_lookup_view(
                     *,
                     ROW_NUMBER() OVER (
                         PARTITION BY uprn
-                        ORDER BY source_priority
+                        ORDER BY source_priority, source_stem
                     ) AS rn
                 FROM core_data
             )
@@ -223,8 +227,7 @@ def _create_metadata_lookup_view(
         """
         con.execute(sql)
 
-    built_path = parquet_dir / "add_gb_builtaddress.parquet"
-    if not built_path.exists():
+    if not built_parts:
         logger.warning("Built Address file not found. LTLA lookup will be empty.")
         con.execute("""
             CREATE OR REPLACE TEMP VIEW builtaddress_ltla_lookup AS
@@ -235,14 +238,14 @@ def _create_metadata_lookup_view(
         """)
         return
 
+    built_union_sql = "\nUNION ALL\n".join(built_parts)
     built_sql = f"""
         CREATE OR REPLACE TEMP VIEW builtaddress_ltla_lookup AS
         SELECT
-            CAST(uprn AS BIGINT) AS uprn,
-            MAX(CAST(lowertierlocalauthoritygsscode AS VARCHAR)) AS lowertierlocalauthoritygsscode
-        FROM read_parquet('{built_path.as_posix()}')
-        {where_clause}
-        GROUP BY CAST(uprn AS BIGINT)
+            uprn,
+            MAX(lowertierlocalauthoritygsscode) AS lowertierlocalauthoritygsscode
+        FROM ({built_union_sql})
+        GROUP BY uprn
     """
     con.execute(built_sql)
 
@@ -251,6 +254,7 @@ def _create_core_feature_view(
     con: duckdb.DuckDBPyConnection,
     view_name: str,
     parquet_path: Path,
+    feature_type: str,
     uprn_predicate: str | None = None,
 ) -> None:
     """Create view for core feature types (Built, Historic, Pre-Build, Non-Addressable).
@@ -287,7 +291,7 @@ def _create_core_feature_view(
             CAST(highestfloorlevel AS DOUBLE) AS highestfloorlevel,
             CAST(NULL AS VARCHAR) AS lowertierlocalauthoritygsscode,
             -- Internal columns for deduplication (not in final output)
-            CAST(description AS VARCHAR) AS feature_type,
+            '{feature_type}' AS feature_type,
             CAST(addressstatus AS VARCHAR) AS address_status,
             CAST(buildstatus AS VARCHAR) AS build_status
         FROM src
@@ -327,7 +331,7 @@ def _create_core_feature_view(
             CAST(highestfloorlevel AS DOUBLE) AS highestfloorlevel,
             CAST(NULL AS VARCHAR) AS lowertierlocalauthoritygsscode,
             -- Internal columns for deduplication (not in final output)
-            CAST(description AS VARCHAR) AS feature_type,
+            '{feature_type}' AS feature_type,
             CAST(addressstatus AS VARCHAR) AS address_status,
             CAST(buildstatus AS VARCHAR) AS build_status
         FROM src
@@ -401,10 +405,12 @@ def _create_royal_mail_view(
     """Create view for Royal Mail Address records.
 
     Builds address from component fields. Produces both English and Welsh variants.
-    Excludes records where matchedaddressfeaturetype is 'Non-Addressable Object'.
+    Excludes records matched to non-addressable objects.
     All metadata columns are NULL here and will be enriched via UPRN lookup.
     """
-    conditions = ["matchedaddressfeaturetype != 'Non-Addressable Object'"]
+    conditions = [
+        "matchedaddressfeaturetype NOT IN ('Non-Addressable Object', 'Non Addressable Object')"
+    ]
     if uprn_predicate:
         conditions.insert(0, uprn_predicate)
     where_clause = "WHERE " + " AND ".join(conditions)
@@ -561,6 +567,7 @@ def _create_custom_level_rows(con: duckdb.DuckDBPyConnection) -> None:
             WHERE floorlevel IS NOT NULL
               AND address_concat IS NOT NULL
               AND address_concat <> ''
+              AND feature_type <> 'Non-Addressable Object'
         ),
         level_words AS (
             SELECT
@@ -645,7 +652,8 @@ def _create_dedup_view(con: duckdb.DuckDBPyConnection) -> None:
               ORDER BY
                 feature_type_rank,
                 address_status_rank,
-                build_status_rank
+                build_status_rank,
+                (NULLIF(TRIM(floorlevel), '') IS NULL) ASC
             ) AS rn
           FROM all_full_addresses_enriched
           WHERE feature_type NOT IN ('Non-Addressable Object')
@@ -749,11 +757,9 @@ def run_flatfile_step(settings: Settings, force: bool = False) -> list[Path | st
     logger.info("Processing %d parquet files from %s", len(parquet_files), parquet_dir)
 
     # Validate UPRN availability in all address parquet files
-    address_parquet_files: list[Path] = []
-    for path in sorted(parquet_files):
-        stem = path.stem.lower()
-        if stem in CORE_FEATURE_STEMS or stem in ALTADD_STEMS or stem == "add_gb_royalmailaddress":
-            address_parquet_files.append(path)
+    address_parquet_files = [
+        path for path in sorted(parquet_files) if path.stem.lower() in FEATURE_TYPE_BY_STEM
+    ]
 
     if not address_parquet_files:
         raise ToFlatfileError("No valid address parquet files found to process.")
@@ -762,7 +768,7 @@ def run_flatfile_step(settings: Settings, force: bool = False) -> list[Path | st
     with destination.connection() as con:
         _ensure_uprn_column(con, address_parquet_files)
         destination.prepare(con, force)
-        output_files = _write_flatfiles(settings, destination, con, parquet_dir, parquet_files)
+        output_files = _write_flatfiles(settings, destination, con, address_parquet_files)
         destination.finish()
 
     elapsed = perf_counter() - t0
@@ -776,7 +782,6 @@ def _write_flatfiles(
     settings: Settings,
     destination: Writer,
     con: duckdb.DuckDBPyConnection,
-    parquet_dir: Path,
     parquet_files: list[Path],
 ) -> list[Path | str]:
     num_chunks = settings.processing.num_chunks
@@ -794,36 +799,29 @@ def _write_flatfiles(
 
         # Create metadata lookup view (for enriching Royal Mail and altadd records)
         logger.debug("Creating metadata lookup view...")
-        _create_metadata_lookup_view(con, parquet_dir, uprn_predicate)
+        _create_metadata_lookup_view(con, parquet_files, uprn_predicate)
 
         created_views: list[str] = []
 
-        for path in sorted(parquet_files):
+        for path in parquet_files:
             stem = path.stem.lower()
             view_name = f"addr_{stem.replace('-', '_')}"
 
-            if stem in CORE_FEATURE_STEMS:
+            if stem in CORE_FEATURE_TYPE_BY_STEM:
                 logger.debug("Creating core feature view for %s", path.name)
-                _create_core_feature_view(con, view_name, path, uprn_predicate)
-                created_views.append(view_name)
+                _create_core_feature_view(
+                    con, view_name, path, CORE_FEATURE_TYPE_BY_STEM[stem], uprn_predicate
+                )
 
-            elif stem in ALTADD_STEMS:
-                feature_type = FEATURE_TYPE_BY_STEM.get(stem, "Alternate Address")
+            elif stem in ALTADD_FEATURE_TYPE_BY_STEM:
+                feature_type = ALTADD_FEATURE_TYPE_BY_STEM[stem]
                 logger.debug("Creating alternate address view for %s", path.name)
                 _create_altadd_view(con, view_name, path, feature_type, uprn_predicate)
-                created_views.append(view_name)
-
-            elif stem == "add_gb_royalmailaddress":
-                logger.debug("Creating Royal Mail view for %s", path.name)
-                _create_royal_mail_view(con, view_name, path, uprn_predicate)
-                created_views.append(view_name)
 
             else:
-                logger.debug("Skipping %s (not a recognized address file)", path.name)
-                continue
-
-        if not created_views:
-            raise ToFlatfileError("No valid address parquet files found to process.")
+                logger.debug("Creating Royal Mail view for %s", path.name)
+                _create_royal_mail_view(con, view_name, path, uprn_predicate)
+            created_views.append(view_name)
 
         logger.info("Created %d address views", len(created_views))
 

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import csv
+import io
 import zipfile
 from pathlib import Path
 
@@ -13,6 +15,7 @@ from ukam_os_builder.api.settings import (
     Settings,
     SourceSettings,
 )
+from ukam_os_builder.data_sources.ngd.to_flatfile import run_flatfile_step
 from ukam_os_builder.os_builder import extract
 
 
@@ -54,6 +57,183 @@ def _count_rows(parquet_path: Path) -> int:
         ).fetchone()[0]
     finally:
         con.close()
+
+
+@pytest.mark.parametrize("include_gb", [False, True], ids=["islands-only", "mixed"])
+def test_ngd_islands_build(tmp_path: Path, include_gb: bool) -> None:
+    settings = _settings(tmp_path)
+    settings.processing.num_chunks = 1
+    downloads = settings.paths.downloads_dir
+
+    def make_csv(feature: str, *rows: dict[str, str]) -> str:
+        fixture = Path(__file__).parent / "data" / f"add_gb_{feature}.csv"
+        with fixture.open(newline="") as source:
+            fieldnames = next(csv.reader(source))
+        with io.StringIO(newline="") as result:
+            writer = csv.DictWriter(result, fieldnames=fieldnames)
+            writer.writeheader()
+            writer.writerows(rows)
+            return result.getvalue()
+
+    _write_zip(
+        downloads / "add_isl_builtaddress.zip",
+        {
+            "add_isl_builtaddress.csv": make_csv(
+                "builtaddress",
+                {
+                    "uprn": "1",
+                    "fulladdress": "1 Test Road, Belfast, BT1 1AA",
+                    "postcode": "BT1 1AA",
+                    "classificationcode": "RD",
+                    "description": "Built Address",
+                },
+            ),
+            "add_isl_builtaddress_altadd.csv": make_csv(
+                "builtaddress_altadd",
+                {"uprn": "1", "fulladdress": "Test Road Alias", "postcode": "BT1 1AA"},
+                {
+                    "uprn": "1",
+                    "fulladdress": "Test Road Alias",
+                    "postcode": "BT1 1AA",
+                    "floorlevel": "6TH AND 7TH LEVELS",
+                },
+            ),
+        },
+    )
+    _write_zip(
+        downloads / "add_isl_royalmailaddress.zip",
+        {
+            "add_isl_royalmailaddress.csv": make_csv(
+                "royalmailaddress",
+                {
+                    "uprn": "1",
+                    "postcode": "BT1 1AA",
+                    "organisationname": "Test Office",
+                    "matchedaddressfeaturetype": "Built Address",
+                },
+                {
+                    "uprn": "3",
+                    "postcode": "IM1 1AA",
+                    "organisationname": "Delivery Point",
+                    "matchedaddressfeaturetype": "Historic Address",
+                },
+                {
+                    "uprn": "4",
+                    "postcode": "BT1 1AA",
+                    "organisationname": "Planned Office",
+                    "matchedaddressfeaturetype": "Prebuild Address",
+                },
+                {
+                    "uprn": "5",
+                    "postcode": "BT1 1AA",
+                    "organisationname": "Excluded Object",
+                    "matchedaddressfeaturetype": "Non Addressable Object",
+                },
+                {
+                    "uprn": "5",
+                    "postcode": "BT1 1AA",
+                    "organisationname": "Excluded Object Alias",
+                    "matchedaddressfeaturetype": "Non-Addressable Object",
+                },
+            ),
+        },
+    )
+    _write_zip(
+        downloads / "add_isl_prebuildaddress.zip",
+        {
+            "add_isl_prebuildaddress.csv": make_csv(
+                "prebuildaddress",
+                {
+                    "uprn": "4",
+                    "fulladdress": "Planned Office",
+                    "postcode": "BT1 1AA",
+                    "classificationcode": "CO",
+                    "description": "Prebuild Address",
+                },
+            ),
+        },
+    )
+    _write_zip(
+        downloads / "add_isl_nonaddressableobject.zip",
+        {
+            "add_isl_nonaddressableobject.csv": make_csv(
+                "builtaddress",
+                {
+                    "uprn": "5",
+                    "fulladdress": "Excluded Object",
+                    "postcode": "BT1 1AA",
+                    "description": "Non Addressable Object",
+                    "floorlevel": "1",
+                },
+            ),
+        },
+    )
+    _write_zip(
+        downloads / "add_isl_historicaddress.zip",
+        {
+            "add_isl_historicaddress.csv": make_csv(
+                "historicaddress",
+                {
+                    "uprn": "3",
+                    "fulladdress": "Old Address",
+                    "postcode": "IM1 1AA",
+                    "classificationcode": "RD",
+                    "description": "Historic Address",
+                },
+            ),
+        },
+    )
+    if include_gb:
+        _write_zip(
+            downloads / "add_gb_builtaddress.zip",
+            {
+                "add_gb_builtaddress.csv": make_csv(
+                    "builtaddress",
+                    {
+                        "uprn": "2",
+                        "fulladdress": "2 Test Road, London, SW1A 1AA",
+                        "postcode": "SW1A 1AA",
+                        "classificationcode": "RD",
+                        "description": "Built Address",
+                        "lowertierlocalauthoritygsscode": "E09000033",
+                    },
+                ),
+            },
+        )
+
+    # Leave a cached Islands historic parquet from before the exclusion changed.
+    extracted = extract.run_extract_step(settings)
+    historic = next(path for path in extracted if path.name == "add_isl_historicaddress.parquet")
+    settings.processing.ngd_excluded_stems = ["historicaddress"]
+    assert historic not in extract.run_extract_step(settings)
+    assert historic.exists()
+
+    output_files = run_flatfile_step(settings)
+    assert len(output_files) == 1
+    with duckdb.connect() as con:
+        result = con.read_parquet(str(output_files[0])).order("unique_id, address_concat")
+        baseline = result.fetchall()
+        rows = result.project(
+            "unique_id, filename, classificationcode, lowertierlocalauthoritygsscode, floorlevel"
+        ).fetchall()
+    expected = {
+        (1, "add_isl_builtaddress.parquet", "RD", None, None),
+        (1, "add_isl_builtaddress_altadd.parquet", "RD", None, "6TH AND 7TH LEVELS"),
+        (1, "add_isl_royalmailaddress.parquet", "RD", None, None),
+        (3, "add_isl_royalmailaddress.parquet", None, None, None),
+        (4, "add_isl_prebuildaddress.parquet", "CO", None, None),
+    }
+    if include_gb:
+        expected.add((2, "add_gb_builtaddress.parquet", "RD", "E09000033", None))
+    assert len(rows) == len(expected)
+    assert set(rows) == expected
+
+    settings.processing.num_chunks = 2
+    chunk_files = run_flatfile_step(settings, force=True)
+    assert len(chunk_files) == 2
+    with duckdb.connect() as con:
+        chunk_result = con.read_parquet([str(path) for path in chunk_files])
+        assert chunk_result.order("unique_id, address_concat").fetchall() == baseline
 
 
 def test_ngd_converts_zip_members_without_extracting_csv(
