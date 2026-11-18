@@ -5,7 +5,6 @@ import io
 import zipfile
 from pathlib import Path
 from threading import Barrier
-from types import SimpleNamespace
 
 import duckdb
 import pytest
@@ -17,7 +16,6 @@ from ukam_os_builder.api.settings import (
     Settings,
     SourceSettings,
 )
-from ukam_os_builder.data_sources.ngd import parallel_zip
 from ukam_os_builder.data_sources.ngd.to_flatfile import run_flatfile_step
 from ukam_os_builder.os_builder import extract
 
@@ -60,110 +58,6 @@ def _count_rows(parquet_path: Path) -> int:
         ).fetchone()[0]
     finally:
         con.close()
-
-
-def test_ngd_extracts_archives_concurrently_without_rapidgzip(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
-) -> None:
-    settings = _settings(tmp_path)
-    for region in ("gb", "isl"):
-        stem = f"add_{region}_builtaddress"
-        _write_zip(
-            settings.paths.downloads_dir / f"{stem}.zip",
-            {f"{stem}.csv": "uprn,fulladdress\n1,One Street\n"},
-        )
-
-    barrier = Barrier(2, timeout=5)
-    original = extract._convert_zip_to_parquet_direct
-
-    def synchronized(*args, **kwargs):
-        barrier.wait()
-        return original(*args, **kwargs)
-
-    def no_rapidgzip(name: str) -> None:
-        raise ModuleNotFoundError(name)
-
-    monkeypatch.setattr(extract.os, "sched_getaffinity", lambda _: set(range(8)), raising=False)
-    monkeypatch.setattr(extract, "import_module", no_rapidgzip)
-    monkeypatch.setattr(extract, "_convert_zip_to_parquet_direct", synchronized)
-
-    with caplog.at_level("INFO"):
-        outputs = extract.run_extract_step(settings)
-
-    assert [path.name for path in outputs] == [
-        "add_gb_builtaddress.parquet",
-        "add_isl_builtaddress.parquet",
-    ]
-    assert [_count_rows(path) for path in outputs] == [1, 1]
-    assert caplog.text.count("python -m pip install rapidgzip") == 1
-    assert not list(settings.paths.extracted_dir.rglob("*.csv"))
-
-
-@pytest.mark.parametrize("broken_decoder", [False, True])
-def test_ngd_parallel_zip_stream_and_serial_retry(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-    caplog: pytest.LogCaptureFixture,
-    broken_decoder: bool,
-) -> None:
-    settings = _settings(tmp_path)
-    stem = "add_isl_builtaddress"
-    archive_path = settings.paths.downloads_dir / f"{stem}.zip"
-    with zipfile.ZipFile(archive_path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
-        archive.writestr("unused.csv", "ignored\n")
-        with archive.open(f"{stem}.csv", "w", force_zip64=True) as member:
-            member.write(b'uprn,fulladdress\n1,"First line\nSecond line"\n2,Other\n')
-
-    attempts = []
-    if not broken_decoder:
-        rapidgzip = pytest.importorskip("rapidgzip")
-
-    class BrokenDecoder(io.BytesIO):
-        def readinto(self, buffer):
-            raise ValueError("decoder rejected stream")
-
-    def open_decoder(file, *, parallelization):
-        attempts.append(parallelization)
-        if broken_decoder:
-            return BrokenDecoder()
-        return rapidgzip.open(file, parallelization=parallelization)
-
-    monkeypatch.setattr(extract.os, "sched_getaffinity", lambda _: set(range(8)), raising=False)
-    monkeypatch.setattr(parallel_zip, "MIN_PARALLEL_COMPRESSED_SIZE", 0)
-    monkeypatch.setattr(extract, "import_module", lambda _: SimpleNamespace(open=open_decoder))
-    [output] = extract.run_extract_step(settings)
-
-    assert attempts and all(threads == 4 for threads in attempts)
-    assert ("Retrying with the standard ZIP reader" in caplog.text) == broken_decoder
-    with duckdb.connect() as con:
-        assert con.read_parquet(str(output)).order("uprn").fetchall() == [
-            (1, "First line\nSecond line"),
-            (2, "Other"),
-        ]
-    assert not list(settings.paths.extracted_dir.rglob("*.csv"))
-
-
-def test_ngd_parallel_decoder_does_not_publish_bad_crc(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    pytest.importorskip("rapidgzip")
-    settings = _settings(tmp_path)
-    stem = "add_isl_builtaddress"
-    archive_path = settings.paths.downloads_dir / f"{stem}.zip"
-    csv_data = "uprn,fulladdress\n" + "".join(f"{i},Test street\n" for i in range(10_000))
-    _write_zip(archive_path, {f"{stem}.csv": csv_data})
-    archive_data = bytearray(archive_path.read_bytes())
-    crc_offset = archive_data.index(b"PK\x01\x02") + 16
-    archive_data[crc_offset] ^= 1
-    archive_path.write_bytes(archive_data)
-
-    monkeypatch.setattr(extract.os, "sched_getaffinity", lambda _: set(range(8)), raising=False)
-    monkeypatch.setattr(parallel_zip, "MIN_PARALLEL_COMPRESSED_SIZE", 0)
-    with pytest.raises(duckdb.Error, match="CRC"):
-        extract.run_extract_step(settings)
-
-    assert not list(settings.paths.extracted_dir.rglob("*.parquet"))
-    assert not list(settings.paths.extracted_dir.rglob("*.tmp"))
 
 
 @pytest.mark.parametrize("include_gb", [False, True], ids=["islands-only", "mixed"])
@@ -343,14 +237,20 @@ def test_ngd_islands_build(tmp_path: Path, include_gb: bool) -> None:
         assert chunk_result.order("unique_id, address_concat").fetchall() == baseline
 
 
-def test_ngd_converts_zip_members_without_extracting_csv(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+@pytest.mark.parametrize("extract_to_disk", [False, True], ids=["streaming", "disk"])
+def test_ngd_converts_only_selected_zip_members(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    extract_to_disk: bool,
 ) -> None:
     settings = _settings(tmp_path)
+    assert settings.processing.ngd_extract_to_disk is False
+    settings.processing.ngd_extract_to_disk = extract_to_disk
     _write_zip(
         settings.paths.downloads_dir / "add_gb_builtaddress.zip",
         {
-            "nested/add_gb_builtaddress.csv": "uprn,fulladdress\n1,One Street\n2,Two Street\n",
+            "nested/add_gb_builtaddress.csv": 'uprn,fulladdress\n1,"One\nStreet"\n2,Two Street\n',
             "nested/add_gb_builtaddress_altadd.csv": "uprn,fulladdress\n3,Three Street\n",
             "nested/add_gb_builtaddress_rltenty.csv": "uprn,related\n1,99\n",
         },
@@ -361,21 +261,58 @@ def test_ngd_converts_zip_members_without_extracting_csv(
     )
 
     original_open = zipfile.ZipFile.open
+    barrier = Barrier(2, timeout=5)
+    archive_handles = []
 
     def open_consumed_member(archive, name, *args, **kwargs):
         member_name = name.filename if isinstance(name, zipfile.ZipInfo) else name
         assert not member_name.endswith(("_rltenty.csv", "streetaddress.csv"))
+        if extract_to_disk:
+            archive_handles.append(archive)
+            barrier.wait()
         return original_open(archive, name, *args, **kwargs)
 
+    monkeypatch.setattr(extract.os, "sched_getaffinity", lambda _: set(range(8)), raising=False)
     monkeypatch.setattr(zipfile.ZipFile, "open", open_consumed_member)
-    outputs = extract.run_extract_step(settings, force=True)
+    with caplog.at_level("INFO"):
+        outputs = extract.run_extract_step(settings, force=True)
 
-    assert sorted(path.name for path in outputs) == [
+    assert [path.name for path in outputs] == [
         "add_gb_builtaddress.parquet",
         "add_gb_builtaddress_altadd.parquet",
     ]
-    assert [_count_rows(path) for path in outputs] == [2, 1]
+    with duckdb.connect() as con:
+        assert con.read_parquet(str(outputs[0])).order("uprn").fetchall() == [
+            (1, "One\nStreet"),
+            (2, "Two Street"),
+        ]
+        assert con.read_parquet(str(outputs[1])).fetchall() == [(3, "Three Street")]
+    if extract_to_disk:
+        assert len(archive_handles) == 2
+        assert archive_handles[0] is not archive_handles[1]
+        assert "2 concurrent jobs and 4 DuckDB threads per job" in caplog.text
+    else:
+        assert "Streaming NGD ZIP members directly to Parquet" in caplog.text
+        assert "processing.ngd_extract_to_disk" in caplog.text
+        assert "substantially more local disk space" in caplog.text
     assert not list(settings.paths.extracted_dir.rglob("*.csv"))
+    assert not list(settings.paths.extracted_dir.glob(".ngd-extract-*"))
+
+
+def test_ngd_disk_extraction_cleans_up_after_crc_failure(tmp_path: Path) -> None:
+    settings = _settings(tmp_path)
+    settings.processing.ngd_extract_to_disk = True
+    archive = settings.paths.downloads_dir / "add_isl_builtaddress.zip"
+    _write_zip(archive, {"add_isl_builtaddress.csv": "uprn,fulladdress\n1,Some Street\n"})
+    data = bytearray(archive.read_bytes())
+    crc_offset = data.index(b"PK\x01\x02") + 16
+    data[crc_offset] ^= 1
+    archive.write_bytes(data)
+
+    with pytest.raises(zipfile.BadZipFile, match="CRC"):
+        extract.run_extract_step(settings)
+
+    assert not list(settings.paths.extracted_dir.iterdir())
 
 
 def test_ngd_royal_mail_preserves_alphanumeric_po_box_numbers(tmp_path: Path) -> None:
@@ -658,10 +595,12 @@ def test_ngd_rejects_duplicate_outputs_across_archives(tmp_path: Path) -> None:
     assert not list(settings.paths.extracted_dir.rglob("*.csv"))
 
 
+@pytest.mark.parametrize("extract_to_disk", [False, True], ids=["streaming", "disk"])
 def test_large_zip_csv_is_exact_with_multiple_writer_threads(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, extract_to_disk: bool
 ) -> None:
     settings = _settings(tmp_path)
+    settings.processing.ngd_extract_to_disk = extract_to_disk
     csv_path = tmp_path / "source.csv"
     expected_sql = (
         "SELECT i AS uprn, repeat('ADDRESS ', 20) || i::VARCHAR AS fulladdress "
