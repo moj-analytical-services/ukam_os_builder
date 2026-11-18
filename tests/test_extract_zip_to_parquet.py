@@ -5,6 +5,7 @@ import io
 import zipfile
 from pathlib import Path
 from threading import Barrier
+from types import SimpleNamespace
 
 import duckdb
 import pytest
@@ -272,6 +273,12 @@ def test_ngd_converts_only_selected_zip_members(
             barrier.wait()
         return original_open(archive, name, *args, **kwargs)
 
+    def missing_rapidgzip(name: str):
+        assert name == "rapidgzip"
+        assert extract_to_disk, "The default streaming mode should not load rapidgzip"
+        raise ModuleNotFoundError(name)
+
+    monkeypatch.setattr(extract, "import_module", missing_rapidgzip)
     monkeypatch.setattr(extract.os, "sched_getaffinity", lambda _: set(range(8)), raising=False)
     monkeypatch.setattr(zipfile.ZipFile, "open", open_consumed_member)
     with caplog.at_level("INFO"):
@@ -291,12 +298,56 @@ def test_ngd_converts_only_selected_zip_members(
         assert len(archive_handles) == 2
         assert archive_handles[0] is not archive_handles[1]
         assert "2 concurrent jobs and 4 DuckDB threads per job" in caplog.text
+        assert "python -m pip install rapidgzip" in caplog.text
     else:
         assert "Streaming NGD ZIP members directly to Parquet" in caplog.text
         assert "processing.ngd_extract_to_disk" in caplog.text
         assert "substantially more local disk space" in caplog.text
     assert not list(settings.paths.extracted_dir.rglob("*.csv"))
     assert not list(settings.paths.extracted_dir.glob(".ngd-extract-*"))
+
+
+@pytest.mark.parametrize("decoder_fails", [False, True], ids=["rapidgzip", "retry"])
+def test_ngd_disk_decompresses_members_with_16_decoder_threads(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    decoder_fails: bool,
+) -> None:
+    settings = _settings(tmp_path)
+    settings.processing.ngd_extract_to_disk = True
+    stem = "add_isl_builtaddress"
+    path = settings.paths.downloads_dir / f"{stem}.zip"
+    with zipfile.ZipFile(path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        archive.writestr("ignored.csv", "unused")
+        with archive.open(f"{stem}.csv", "w", force_zip64=True) as member:
+            member.write(b'uprn,fulladdress\n1,"First line\nSecond line"\n')
+
+    if not decoder_fails:
+        rapidgzip = pytest.importorskip("rapidgzip")
+
+    class FailingDecoder(io.BytesIO):
+        def read(self, size=-1):
+            if self.tell():
+                raise ValueError("test decoder failed after emitting a prefix")
+            return super().read(size)
+
+    thread_counts = []
+
+    def open_decoder(file, *, parallelization):
+        thread_counts.append(parallelization)
+        if decoder_fails:
+            return FailingDecoder(b"incorrect prefix")
+        return rapidgzip.open(file, parallelization=parallelization)
+
+    monkeypatch.setattr(extract, "import_module", lambda _: SimpleNamespace(open=open_decoder))
+    [output] = extract.run_extract_step(settings)
+
+    assert thread_counts == [16]
+    assert ("Retrying with the standard ZIP reader" in caplog.text) == decoder_fails
+    with duckdb.connect() as con:
+        assert con.read_parquet(str(output)).fetchall() == [(1, "First line\nSecond line")]
+    assert not list(settings.paths.extracted_dir.rglob("*.csv"))
 
 
 def test_ngd_disk_extraction_cleans_up_after_crc_failure(tmp_path: Path) -> None:

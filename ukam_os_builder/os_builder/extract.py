@@ -7,6 +7,7 @@ import tempfile
 import zipfile
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
+from importlib import import_module
 from pathlib import Path
 
 import duckdb
@@ -18,6 +19,7 @@ from ukam_os_builder.data_sources.ngd.ngd_exclusions import (
     is_ngd_address_file,
     ngd_file_matches_excluded_stem,
 )
+from ukam_os_builder.data_sources.ngd.parallel_zip import DECODER_THREADS, copy_zip_member
 
 logger = logging.getLogger(__name__)
 
@@ -466,7 +468,21 @@ def _convert_ngd_via_disk(
     cpu_count = (
         len(os.sched_getaffinity(0)) if hasattr(os, "sched_getaffinity") else os.cpu_count()
     ) or 1
-    workers = min(len(pending), cpu_count, max(2, cpu_count // 4))
+    try:
+        rapidgzip = import_module("rapidgzip")
+    except (ImportError, OSError):
+        rapidgzip = None
+        max_workers = min(cpu_count, max(2, cpu_count // 4))
+        logger.info(
+            "Decompressing each NGD ZIP member on one core. Install rapidgzip in this Python "
+            "environment (python -m pip install rapidgzip) to use %d decoder threads per member "
+            "in disk mode.",
+            DECODER_THREADS,
+        )
+    else:
+        max_workers = max(1, cpu_count // DECODER_THREADS)
+        logger.info("Using rapidgzip with %d decoder threads per DEFLATE member.", DECODER_THREADS)
+    workers = min(len(pending), max_workers)
     threads_per_worker = cpu_count // workers
     logger.info(
         "Extracting NGD ZIP members to temporary CSVs with up to %d concurrent jobs "
@@ -481,14 +497,7 @@ def _convert_ngd_via_disk(
         ) as temporary_dir:
             scratch = Path(temporary_dir)
             csv_path = scratch / "source.csv"
-            # A worker owns the archive handle and reads the member to EOF so
-            # zipfile checks the CRC before DuckDB starts reading the CSV.
-            with (
-                zipfile.ZipFile(archive_path) as archive,
-                archive.open(member.name) as source,
-                csv_path.open("wb") as output,
-            ):
-                shutil.copyfileobj(source, output, length=1024 * 1024)
+            copy_zip_member(archive_path, member.name, csv_path, rapidgzip)
 
             with create_duckdb_connection(
                 settings,
