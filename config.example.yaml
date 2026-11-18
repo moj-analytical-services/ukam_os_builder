@@ -36,6 +36,10 @@ os_downloads:
   package_id: "18296"
   # Version ID (update this when new data is released)
   version_id: "118120"
+  # Concurrent HTTP byte ranges per large ZIP (>= 16 MiB with an OS checksum).
+  # 1 = sequential download (default); set to e.g. 8 or 16 for faster downloads.
+  # Files are processed one at a time. Falls back to a whole-file request if ranges are ignored.
+  download_parts: 1
 
 # Full supply
 # os_downloads:

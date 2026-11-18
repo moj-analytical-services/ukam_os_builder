@@ -387,6 +387,7 @@ os_downloads:
   version_id: "<your_version_id>"
   connect_timeout_seconds: 30
   read_timeout_seconds: 300
+  download_parts: 1  # 1 = sequential; e.g. 8 or 16 for parallel byte-range downloads
 
 processing:
   parquet_compression: zstd
