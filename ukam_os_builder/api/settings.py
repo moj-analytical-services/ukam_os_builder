@@ -69,6 +69,9 @@ class SourceSettings(StrictBaseModel):
     type: Literal["ngd", "abp"] = "ngd"
 
 
+DEFAULT_DOWNLOAD_PARTS = 16
+
+
 class OSDownloadSettings(StrictBaseModel):
     """OS Data Hub download configuration."""
 
@@ -78,6 +81,8 @@ class OSDownloadSettings(StrictBaseModel):
     api_secret: SecretStr | None = None
     connect_timeout_seconds: int = 30
     read_timeout_seconds: int = 300
+    parallel_downloads: bool = False
+    download_parts: int = Field(default=DEFAULT_DOWNLOAD_PARTS, ge=1, strict=True)
 
     @field_validator("package_id", "version_id")
     @classmethod

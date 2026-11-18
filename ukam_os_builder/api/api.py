@@ -10,6 +10,7 @@ import requests
 import yaml
 
 from ukam_os_builder.api.settings import (
+    DEFAULT_DOWNLOAD_PARTS,
     OutputSettings,
     PathSettings,
     Settings,
@@ -51,6 +52,8 @@ def _default_config() -> dict[str, object]:
         "os_downloads": {
             "package_id": "",
             "version_id": "",
+            "parallel_downloads": False,
+            "download_parts": DEFAULT_DOWNLOAD_PARTS,
         },
         "processing": {
             "parquet_compression": "zstd",
@@ -205,7 +208,10 @@ def render_annotated_config(config: dict[str, object]) -> str:
         "  # Data package ID from OS Data Hub\n"
         f'  package_id: "{os_downloads["package_id"]}"\n'
         "  # Version ID (update this when new data is released)\n"
-        f'  version_id: "{os_downloads["version_id"]}"\n\n'
+        f'  version_id: "{os_downloads["version_id"]}"\n'
+        "  # Opt in to downloading large ZIP files in concurrent HTTP byte ranges\n"
+        f"  parallel_downloads: {str(os_downloads.get('parallel_downloads', False)).lower()}\n"
+        f"  download_parts: {os_downloads.get('download_parts', DEFAULT_DOWNLOAD_PARTS)}\n\n"
         "# Processing options\n"
         "processing:\n"
         "  # Enable parallel NGD extraction and CSV parsing using much more local disk space\n"
