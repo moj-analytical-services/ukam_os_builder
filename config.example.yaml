@@ -36,6 +36,10 @@ os_downloads:
   package_id: "18296"
   # Version ID (update this when new data is released)
   version_id: "118120"
+  # Opt in to concurrent HTTP byte ranges for ZIPs of at least 16 MiB with an OS checksum.
+  # Files are processed one at a time. The builder uses a whole-file request if ranges are ignored.
+  parallel_downloads: false
+  download_parts: 16
 
 # Full supply
 # os_downloads:
