@@ -2,14 +2,18 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import os
+import tempfile
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from pathlib import Path
+from threading import Event
 from typing import Any
 from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
 import requests
 
-from ukam_os_builder.api.settings import Settings
+from ukam_os_builder.api.settings import DEFAULT_DOWNLOAD_PARTS, Settings
 from ukam_os_builder.data_sources.ngd.ngd_exclusions import (
     get_configured_ngd_excluded_stems,
     ngd_file_matches_excluded_stem,
@@ -18,6 +22,7 @@ from ukam_os_builder.data_sources.ngd.ngd_exclusions import (
 logger = logging.getLogger(__name__)
 
 API_BASE_URL = "https://api.os.uk/downloads/v1"
+
 
 def _should_skip_ngd_download(filename: str, settings: object) -> bool:
     """Return True if *filename* matches configured NGD feature exclusions."""
@@ -33,6 +38,17 @@ def _should_skip_ngd_download(filename: str, settings: object) -> bool:
 DEFAULT_CHUNK_SIZE = 1024 * 1024 * 20  # 20 MiB
 DEFAULT_CONNECT_TIMEOUT_SECONDS = 30
 DEFAULT_READ_TIMEOUT_SECONDS = 300
+MIN_PARALLEL_DOWNLOAD_SIZE = 16 * 1024 * 1024
+RANGE_READ_SIZE = 1024 * 1024
+RANGE_ATTEMPTS = 3
+
+
+class _RangesUnsupported(Exception):
+    """The server returned a whole file in response to a Range request."""
+
+
+class _RetryableRangeError(Exception):
+    """A transient response interrupted a byte range."""
 
 
 @dataclass
@@ -172,9 +188,113 @@ def _calculate_md5(file_path: Path) -> str:
     """Calculate MD5 hash of a file."""
     md5_hash = hashlib.md5(usedforsecurity=False)
     with open(file_path, "rb") as f:
-        for chunk in iter(lambda: f.read(8192), b""):
+        for chunk in iter(lambda: f.read(RANGE_READ_SIZE), b""):
             md5_hash.update(chunk)
     return md5_hash.hexdigest()
+
+
+def _download_range(
+    url: str,
+    part_path: Path,
+    start: int,
+    end: int,
+    total_size: int,
+    timeout: tuple[int, int],
+    stop: Event,
+) -> None:
+    offset = start
+    with requests.Session() as session, part_path.open("r+b") as output:
+        output.seek(start)
+        for attempt in range(RANGE_ATTEMPTS):
+            if stop.is_set():
+                return
+            try:
+                headers = {"Range": f"bytes={offset}-{end}", "Accept-Encoding": "identity"}
+                with session.get(url, headers=headers, stream=True, timeout=timeout) as response:
+                    status = response.status_code
+                    if status == 200:
+                        raise _RangesUnsupported
+                    if status in {429, 500, 502, 503, 504}:
+                        raise _RetryableRangeError(f"HTTP {status}")
+                    if status != 206:
+                        raise ValueError(f"Unexpected HTTP {status} for range {offset}-{end}")
+                    content_range = response.headers.get("Content-Range", "")
+                    if content_range.strip() != f"bytes {offset}-{end}/{total_size}":
+                        raise ValueError(f"Unexpected Content-Range for bytes {offset}-{end}")
+                    encoding = response.headers.get("Content-Encoding", "identity")
+                    if encoding.lower() != "identity":
+                        raise ValueError(f"Unexpected Content-Encoding for bytes {offset}-{end}")
+                    for chunk in response.iter_content(chunk_size=RANGE_READ_SIZE):
+                        if stop.is_set():
+                            return
+                        if len(chunk) > end + 1 - offset:
+                            raise ValueError(f"Response exceeded range {start}-{end}")
+                        output.write(chunk)
+                        offset += len(chunk)
+                if offset == end + 1:
+                    return
+                raise _RetryableRangeError("incomplete response body")
+            except (requests.exceptions.RequestException, _RetryableRangeError) as exc:
+                if offset == end + 1:
+                    return
+                if attempt == RANGE_ATTEMPTS - 1:
+                    # Requests exceptions can include the API key or signed download URL.
+                    reason = (
+                        str(exc) if isinstance(exc, _RetryableRangeError) else type(exc).__name__
+                    )
+                    raise OSError(f"Download failed for bytes {offset}-{end}: {reason}") from None
+                if stop.wait(2**attempt):
+                    return
+
+
+def _download_file_in_parts(
+    url: str,
+    dest_path: Path,
+    expected_size: int,
+    expected_md5: str,
+    parts: int,
+    timeout: tuple[int, int],
+) -> None:
+    # Each worker writes to a distinct region. The final filename is only used
+    # after the complete set of ranges has passed verification.
+    parts = min(parts, expected_size)
+    file_descriptor, temporary_name = tempfile.mkstemp(
+        prefix=f".{dest_path.name}.", suffix=".part", dir=dest_path.parent
+    )
+    part_path = Path(temporary_name)
+    try:
+        with os.fdopen(file_descriptor, "wb") as output:
+            output.truncate(expected_size)
+        stop = Event()
+        logger.info("Downloading %s in %d parallel HTTP ranges", dest_path.name, parts)
+        with ThreadPoolExecutor(max_workers=parts) as executor:
+            try:
+                jobs = [
+                    executor.submit(
+                        _download_range,
+                        url,
+                        part_path,
+                        part * expected_size // parts,
+                        (part + 1) * expected_size // parts - 1,
+                        expected_size,
+                        timeout,
+                        stop,
+                    )
+                    for part in range(parts)
+                ]
+                for job in as_completed(jobs):
+                    job.result()
+            finally:
+                stop.set()
+
+        actual_md5 = _calculate_md5(part_path)
+        if actual_md5 != expected_md5:
+            raise ValueError(
+                f"MD5 mismatch for {dest_path.name}: expected {expected_md5}, got {actual_md5}"
+            )
+        part_path.replace(dest_path)
+    finally:
+        part_path.unlink(missing_ok=True)
 
 
 def download_file(
@@ -187,8 +307,15 @@ def download_file(
     connect_timeout_seconds: int = DEFAULT_CONNECT_TIMEOUT_SECONDS,
     read_timeout_seconds: int = DEFAULT_READ_TIMEOUT_SECONDS,
     session: requests.Session | None = None,
+    *,
+    expected_size: int | None = None,
+    parts: int = 1,
 ) -> bool:
-    """Download a file with streaming and checksum verification."""
+    """Download with streaming and checksum verification.
+
+    Large ZIPs with known size and MD5 can use multiple byte ranges. If the
+    server ignores range requests, use the normal whole-file transfer.
+    """
     if dest_path.exists() and not force:
         if expected_md5:
             actual_md5 = _calculate_md5(dest_path)
@@ -203,6 +330,26 @@ def download_file(
     dest_path.parent.mkdir(parents=True, exist_ok=True)
     part_path = dest_path.with_suffix(dest_path.suffix + ".part")
     download_url = _add_key_param(url, api_key)
+    timeout = (connect_timeout_seconds, read_timeout_seconds)
+
+    if (
+        parts > 1
+        and dest_path.suffix.lower() == ".zip"
+        and expected_md5
+        and isinstance(expected_size, int)
+        and expected_size >= MIN_PARALLEL_DOWNLOAD_SIZE
+    ):
+        try:
+            _download_file_in_parts(
+                download_url, dest_path, expected_size, expected_md5, parts, timeout
+            )
+        except _RangesUnsupported:
+            logger.info(
+                "Server ignored HTTP ranges for %s. Downloading the whole file.", dest_path.name
+            )
+        else:
+            logger.info("Downloaded: %s (%s)", dest_path.name, format_size(expected_size))
+            return True
 
     logger.info("Downloading %s...", dest_path.name)
 
@@ -210,7 +357,7 @@ def download_file(
     response = sess.get(
         download_url,
         stream=True,
-        timeout=(connect_timeout_seconds, read_timeout_seconds),
+        timeout=timeout,
     )
     try:
         response.raise_for_status()
@@ -326,6 +473,7 @@ def run_download_step(
         "read_timeout_seconds",
         DEFAULT_READ_TIMEOUT_SECONDS,
     )
+    parts = getattr(settings.os_downloads, "download_parts", DEFAULT_DOWNLOAD_PARTS)
 
     session = requests.Session()
     downloaded: list[Path] = []
@@ -349,6 +497,8 @@ def run_download_step(
                 connect_timeout_seconds=connect_timeout,
                 read_timeout_seconds=read_timeout,
                 session=session,
+                expected_size=item.size,
+                parts=parts,
             )
 
             if was_downloaded or dest_path.exists():
