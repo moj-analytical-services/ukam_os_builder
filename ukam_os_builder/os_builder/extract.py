@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import shutil
 import tempfile
 import zipfile
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -17,8 +19,33 @@ from ukam_os_builder.data_sources.ngd.ngd_exclusions import (
     is_ngd_address_file,
     ngd_file_matches_excluded_stem,
 )
+from ukam_os_builder.data_sources.ngd.parallel_zip import (
+    DECODER_THREADS,
+    copy_zip_member,
+    find_rapidgzip,
+)
 
 logger = logging.getLogger(__name__)
+
+_PARALLEL_DUCKDB_MEMORY_HEADROOM = 0.85
+_MEMORY_LIMIT_PATTERN = re.compile(r"^\s*(\d+(?:\.\d+)?)\s*([a-zA-Z]+)\s*$")
+_MEMORY_UNIT_MULTIPLIERS = {
+    "b": 1,
+    "byte": 1,
+    "bytes": 1,
+    "kb": 1_000,
+    "mb": 1_000**2,
+    "gb": 1_000**3,
+    "tb": 1_000**4,
+    "pb": 1_000**5,
+    "eb": 1_000**6,
+    "kib": 1 << 10,
+    "mib": 1 << 20,
+    "gib": 1 << 30,
+    "tib": 1 << 40,
+    "pib": 1 << 50,
+    "eib": 1 << 60,
+}
 
 
 class ZipStreamError(RuntimeError):
@@ -27,11 +54,24 @@ class ZipStreamError(RuntimeError):
 
 @dataclass(frozen=True)
 class _ZipCsvMember:
-    """CSV member metadata needed for direct ZIP-to-Parquet conversion."""
+    """CSV member metadata needed for ZIP-to-Parquet conversion."""
 
     name: str
     uri: str
     output_path: Path
+    uncompressed_size: int = 0
+    compressed_size: int = 0
+    compress_type: int = zipfile.ZIP_STORED
+
+
+@dataclass(frozen=True)
+class _DiskExtractionPlan:
+    """Resource-bounded execution plan for disk-staged NGD extraction."""
+
+    workers: int
+    duckdb_threads: int
+    decoder_threads: int
+    estimated_peak_scratch_bytes: int
 
 
 def find_downloaded_zips(downloads_dir: Path) -> list[Path]:
@@ -321,6 +361,9 @@ def _discover_zip_csv_members(
                 name=member_name,
                 uri=f"zip://{member_name}",
                 output_path=output_path,
+                uncompressed_size=info.file_size,
+                compressed_size=info.compress_size,
+                compress_type=info.compress_type,
             )
         )
 
@@ -408,33 +451,250 @@ def _convert_zip_to_parquet_direct(
                 logger.debug("Could not close ZIP filesystem", exc_info=True)
 
 
+def _available_cpu_count() -> int:
+    if hasattr(os, "sched_getaffinity"):
+        return len(os.sched_getaffinity(0)) or 1
+    return os.cpu_count() or 1
+
+
+def _parse_duckdb_memory_limit_bytes(setting: str) -> int | None:
+    stripped = setting.strip()
+    if not stripped or stripped.lower() == "unlimited":
+        return None
+    match = _MEMORY_LIMIT_PATTERN.match(stripped)
+    if match is None:
+        return None
+    amount_text, unit = match.groups()
+    multiplier = _MEMORY_UNIT_MULTIPLIERS.get(unit.lower())
+    if multiplier is None:
+        return None
+    return int(float(amount_text) * multiplier)
+
+
+def _share_duckdb_memory_limit(con: duckdb.DuckDBPyConnection, workers: int) -> None:
+    if workers <= 1:
+        return
+    row = con.execute("SELECT current_setting('memory_limit')").fetchone()
+    if not row or not isinstance(row[0], str):
+        return
+    total_bytes = _parse_duckdb_memory_limit_bytes(row[0])
+    if total_bytes is None:
+        return
+    # Leave headroom for rapidgzip subprocesses and DuckDB allocations outside the buffer pool.
+    bytes_per_worker = max(1, int(total_bytes * _PARALLEL_DUCKDB_MEMORY_HEADROOM / workers))
+    con.execute("SET memory_limit = ?", [f"{bytes_per_worker}B"])
+
+
+def _estimate_member_scratch_bytes(member: _ZipCsvMember, *, use_rapidgzip: bool) -> int:
+    gzip_copy = (
+        member.compressed_size
+        if (use_rapidgzip and member.compress_type == zipfile.ZIP_DEFLATED)
+        else 0
+    )
+    parquet_and_spill_headroom = member.uncompressed_size // 4
+    return gzip_copy + member.uncompressed_size + parquet_and_spill_headroom
+
+
+def _plan_disk_extraction(
+    pending: list[tuple[Path, _ZipCsvMember]],
+    *,
+    cpu_count: int,
+    free_bytes: int,
+    has_rapidgzip: bool,
+    scratch_dir: Path,
+) -> _DiskExtractionPlan:
+    cpu_workers = (
+        max(1, cpu_count // DECODER_THREADS)
+        if has_rapidgzip
+        else min(cpu_count, max(2, cpu_count // 4))
+    )
+    workers = min(len(pending), max(1, cpu_workers))
+
+    largest_needed = _estimate_member_scratch_bytes(pending[0][1], use_rapidgzip=has_rapidgzip)
+    if free_bytes < largest_needed:
+        raise ValueError(
+            f"ngd_extract_to_disk requires at least ~{largest_needed:,} free bytes in "
+            f"{scratch_dir} ({free_bytes:,} available). "
+            "Free local disk space or set processing.ngd_extract_to_disk: false to stream from ZIPs."
+        )
+
+    while workers > 1:
+        peak_scratch = sum(
+            _estimate_member_scratch_bytes(member, use_rapidgzip=has_rapidgzip)
+            for _, member in pending[:workers]
+        )
+        if peak_scratch <= free_bytes:
+            break
+        workers -= 1
+
+    peak_scratch = sum(
+        _estimate_member_scratch_bytes(member, use_rapidgzip=has_rapidgzip)
+        for _, member in pending[:workers]
+    )
+    duckdb_threads = max(1, cpu_count // workers)
+    decoder_threads = min(DECODER_THREADS, duckdb_threads) if has_rapidgzip else 1
+    return _DiskExtractionPlan(
+        workers=workers,
+        duckdb_threads=duckdb_threads,
+        decoder_threads=decoder_threads,
+        estimated_peak_scratch_bytes=peak_scratch,
+    )
+
+
+def _convert_member_via_temp_csv(
+    archive_path: Path,
+    member: _ZipCsvMember,
+    settings: Settings,
+    force: bool,
+    *,
+    scratch_root: Path,
+    rapidgzip: str | None,
+    decoder_threads: int,
+    workers: int,
+    duckdb_threads: int | None,
+) -> Path:
+    with tempfile.TemporaryDirectory(prefix="tmp_ngd_extract_", dir=scratch_root) as temporary_dir:
+        scratch = Path(temporary_dir)
+        csv_path = scratch / "source.csv"
+        copy_zip_member(
+            archive_path,
+            member.name,
+            csv_path,
+            rapidgzip,
+            scratch=scratch,
+            decoder_threads=decoder_threads,
+        )
+
+        config: dict[str, object] = {"temp_directory": str(scratch / "spill")}
+        if duckdb_threads is not None:
+            config["threads"] = duckdb_threads
+
+        with create_duckdb_connection(settings, config=config) as con:
+            _share_duckdb_memory_limit(con, workers)
+            return _copy_csv_source_to_parquet(
+                con=con,
+                csv_source=csv_path.as_posix(),
+                output_path=member.output_path,
+                force=force,
+                settings=settings,
+            )
+
+
+def _convert_ngd_via_disk(
+    archive_members: list[tuple[Path, list[_ZipCsvMember]]],
+    settings: Settings,
+    force: bool,
+) -> list[Path]:
+    jobs = [(archive, member) for archive, members in archive_members for member in members]
+    pending = [
+        (archive, member) for archive, member in jobs if force or not member.output_path.exists()
+    ]
+    outputs = [member.output_path for _, member in jobs]
+    if not pending:
+        return outputs
+
+    # Starting with the largest members reduces tail latency and bounds peak scratch usage.
+    pending.sort(key=lambda job: job[1].uncompressed_size, reverse=True)
+
+    cpu_count = _available_cpu_count()
+    rapidgzip = find_rapidgzip()
+    free_bytes = shutil.disk_usage(settings.paths.extracted_dir).free
+    plan = _plan_disk_extraction(
+        pending,
+        cpu_count=cpu_count,
+        free_bytes=free_bytes,
+        has_rapidgzip=rapidgzip is not None,
+        scratch_dir=settings.paths.extracted_dir,
+    )
+
+    if rapidgzip is None:
+        logger.warning(
+            "rapidgzip executable not found; falling back to single-core decompression per ZIP member."
+        )
+    else:
+        logger.info(
+            "Using rapidgzip with %d decoder threads per DEFLATE member.",
+            plan.decoder_threads,
+        )
+    logger.info(
+        "Extracting NGD ZIP members to temporary CSVs with up to %d concurrent jobs "
+        "and %d DuckDB threads per job (estimated peak scratch ~%d bytes; %d bytes free).",
+        plan.workers,
+        plan.duckdb_threads,
+        plan.estimated_peak_scratch_bytes,
+        free_bytes,
+    )
+
+    with ThreadPoolExecutor(max_workers=plan.workers) as executor:
+        futures = [
+            executor.submit(
+                _convert_member_via_temp_csv,
+                archive_path,
+                member,
+                settings,
+                force,
+                scratch_root=settings.paths.extracted_dir,
+                rapidgzip=rapidgzip,
+                decoder_threads=plan.decoder_threads,
+                workers=plan.workers,
+                duckdb_threads=plan.duckdb_threads,
+            )
+            for archive_path, member in pending
+        ]
+        try:
+            for future in as_completed(futures):
+                future.result()
+        finally:
+            for future in futures:
+                future.cancel()
+    return outputs
+
+
 def _convert_zip_to_parquet_with_fallback(
     zip_path: Path,
     extracted_dir: Path,
     settings: Settings,
-    source: str,
-    ngd_excluded_stems: list[str],
     force: bool,
     members: list[_ZipCsvMember],
 ) -> list[Path]:
     try:
         return _convert_zip_to_parquet_direct(zip_path, members, settings, force)
     except ZipStreamError as exc:
+        pending = [member for member in members if force or not member.output_path.exists()]
+        if not pending:
+            return [member.output_path for member in members]
+
+        largest_needed = max(
+            _estimate_member_scratch_bytes(member, use_rapidgzip=False) for member in pending
+        )
+        free_bytes = shutil.disk_usage(extracted_dir).free
+        if free_bytes < largest_needed:
+            raise ZipStreamError(
+                f"Direct ZIP-to-Parquet conversion failed for {zip_path.name} ({exc}), "
+                f"and {extracted_dir} lacks sufficient free disk space for temporary CSV fallback "
+                f"(needs ~{largest_needed:,} bytes, {free_bytes:,} available)."
+            ) from exc
+
         logger.warning(
-            "Direct ZIP-to-Parquet conversion failed for %s: %s; falling back to CSV extraction",
+            "Direct ZIP-to-Parquet conversion failed for %s: %s; "
+            "falling back to temporary single-member CSV extraction",
             zip_path.name,
             exc,
         )
 
-    csv_paths = extract_zip_to_csv(zip_path, extracted_dir, force=force)
-    return _convert_extracted_csvs_to_parquet(
-        csv_paths=csv_paths,
-        parquet_dir=extracted_dir / "parquet",
-        settings=settings,
-        source=source,
-        ngd_excluded_stems=ngd_excluded_stems,
-        force=force,
-    )
+        for member in pending:
+            _convert_member_via_temp_csv(
+                zip_path,
+                member,
+                settings,
+                force,
+                scratch_root=extracted_dir,
+                rapidgzip=None,
+                decoder_threads=1,
+                workers=1,
+                duckdb_threads=None,
+            )
+        return [member.output_path for member in members]
 
 
 def discover_raw_csv_files(extracted_dir: Path) -> list[Path]:
@@ -544,6 +804,16 @@ def run_extract_step(
                 output_owners[member.output_path] = (zip_path, member.name)
             archive_members.append((zip_path, members))
 
+        if settings.processing.ngd_extract_to_disk:
+            parquet_files = _convert_ngd_via_disk(archive_members, settings, force)
+            logger.info("Extraction complete: %d parquet files", len(parquet_files))
+            return parquet_files
+
+        logger.info(
+            "Streaming NGD ZIP members directly to Parquet. Set processing.ngd_extract_to_disk "
+            "to true for faster parallel extraction via temporary CSVs (uses substantially more "
+            "temporary disk space)."
+        )
         parquet_files: list[Path] = []
         for zip_path, members in archive_members:
             parquet_files.extend(
@@ -551,8 +821,6 @@ def run_extract_step(
                     zip_path=zip_path,
                     extracted_dir=extracted_dir,
                     settings=settings,
-                    source=source_type,
-                    ngd_excluded_stems=ngd_excluded_stems,
                     force=force,
                     members=members,
                 )

@@ -121,6 +121,7 @@ class ProcessingSettings(StrictBaseModel):
     num_chunks: int = 10
     ngd_excluded_stems: list[str] = Field(default_factory=lambda: list(DEFAULT_NGD_EXCLUDED_STEMS))
     ngd_keep_all_columns: bool = False
+    ngd_extract_to_disk: bool = Field(default=False, strict=True)
     abp_excluded_logical_statuses: list[int] = Field(
         default_factory=lambda: list(DEFAULT_ABP_EXCLUDED_LOGICAL_STATUSES)
     )
@@ -410,16 +411,19 @@ def load_settings(
         ) from exc
 
 
-def create_duckdb_connection(settings: Settings) -> duckdb.DuckDBPyConnection:
+def create_duckdb_connection(
+    settings: Settings, *, config: dict[str, Any] | None = None
+) -> duckdb.DuckDBPyConnection:
     """Create a DuckDB connection with optional memory limit applied.
 
     Args:
         settings: Settings object containing processing configuration.
+        config: Optional DuckDB connection configuration options.
 
     Returns:
         DuckDB connection with memory limit applied if configured.
     """
-    con = duckdb.connect()
+    con = duckdb.connect(config=config or {})
 
     # Apply memory limit if configured
     if settings.processing.duckdb_memory_limit:
