@@ -8,7 +8,7 @@ from ukam_os_builder.os_builder.inspect_results import (
     inspect_flatfile_variants,
 )
 
-__version__ = "0.4.0"
+__version__ = "0.5.0"
 
 __all__ = [
     "create_config_and_env",
