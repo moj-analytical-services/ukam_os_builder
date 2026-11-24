@@ -7,7 +7,6 @@ import logging
 import os
 import shutil
 import struct
-# Invokes the resolved rapidgzip binary directly with shell=False and fixed flags.
 import subprocess  # nosec B404
 import sys
 import zipfile
