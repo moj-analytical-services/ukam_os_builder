@@ -53,6 +53,9 @@ processing:
   # NGD source Parquets retain only fields used by canonical building.
   # Set true to keep every source column; use --force after changing this option.
   ngd_keep_all_columns: false
+  # Opt in to parallel NGD extraction to temporary CSVs and parallel CSV parsing.
+  # Enabling this will require substantially more temporary disk space (CSVs are cleaned up after conversion).
+  ngd_extract_to_disk: false
   # Parquet compression settings
   parquet_compression: zstd
   parquet_compression_level: 9

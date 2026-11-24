@@ -133,7 +133,7 @@ For a local base, all directories are derived under `work_dir`. For an S3 or Azu
 
 | Command | Purpose | Key options |
 |---|---|---|
-| `ukam-os-setup` | Create or update pipeline config interactively | `--config-out`, `--env-out`, `--overwrite-env`, `--non-interactive`, `--source`, `--package-id`, `--version-id`, `--download-parts` |
+| `ukam-os-setup` | Create or update pipeline config interactively | `--config-out`, `--env-out`, `--overwrite-env`, `--non-interactive`, `--source`, `--package-id`, `--version-id`, `--download-parts`, `--ngd-extract-to-disk` |
 | `ukam-os-build` | Run pipeline stages (`download`, `extract`, `split`, `flatfile`, `all`) | `--config`, `--source`, `--env-file`, `--step`, `--overwrite`, `--list-only`, `--package-id`, `--version-id`, `--work-dir`, `--downloads-dir`, `--extracted-dir`, `--output-dir`, `--num-chunks`, `--duckdb-memory-limit`, `--parquet-compression`, `--parquet-compression-level`, `--ngd-excluded-stems`, `--abp-excluded-logical-statuses`, `--verbose` |
 
 ### Command notes
@@ -169,9 +169,7 @@ All stages are idempotent. Use `--overwrite` to regenerate outputs (`--force` is
 
 ### ZIP extraction behavior
 
-For NGD, the `extract` stage registers each downloaded ZIP with `fsspec` and DuckDB reads eligible CSV members from the archive while writing Parquet outputs. The decompressed CSV members are not persisted in `paths.extracted_dir`. Parquet files are written through temporary files and renamed into place after a successful conversion.
-
-If the ZIP filesystem cannot be opened, registered, or read, the stage falls back to the legacy CSV extraction path. CSV parsing, type inference, conversion, and output-write errors are reported directly and do not trigger that fallback. Existing downloaded ZIPs can therefore be processed offline with:
+For NGD, the `extract` stage streams CSVs directly from downloaded ZIPs to Parquet by default without persisting extracted CSVs (or set `processing.ngd_extract_to_disk: true` for faster parallel extraction via temporary CSVs). Existing downloaded ZIPs can be processed offline with:
 
 ```bash
 ukam-os-build --config config.yaml --step extract
@@ -394,6 +392,7 @@ processing:
   parquet_compression_level: 9
   num_chunks: 10
   sort_output_by_postcode: false
+  ngd_extract_to_disk: false
   ngd_excluded_stems:
     - historicaddress
   abp_excluded_logical_statuses:
@@ -402,6 +401,8 @@ processing:
 ```
 
 `parquet_compression` and `parquet_compression_level` apply to intermediate and final Parquet files. Set `sort_output_by_postcode: true` to sort each final NGD chunk by postcode and `unique_id`; this can reduce file size but requires additional sorting work. This controls output order, not which record is kept when deduplication priorities tie.
+
+Set `ngd_extract_to_disk: true` for faster parallel NGD extraction via temporary CSVs (cleaned up automatically). This uses substantially more temporary disk space than the default streaming mode.
 
 With a local base, the tool creates these directories under `paths.work_dir`:
 

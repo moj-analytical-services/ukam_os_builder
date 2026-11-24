@@ -127,6 +127,15 @@ def _build_parser() -> argparse.ArgumentParser:
             f"(1 = sequential, max {MAX_DOWNLOAD_PARTS}; e.g. 8 or 16)."
         ),
     )
+    parser.add_argument(
+        "--ngd-extract-to-disk",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help=(
+            "Opt in to parallel NGD extraction via temporary CSVs on local disk "
+            "(uses substantially more scratch space; default: false)."
+        ),
+    )
     return parser
 
 
@@ -151,6 +160,8 @@ def main(argv: list[str] | None = None) -> int:
     config = load_existing_defaults(config_out)
     if args.download_parts is not None:
         config["os_downloads"]["download_parts"] = args.download_parts
+    if args.ngd_extract_to_disk is not None:
+        config["processing"]["ngd_extract_to_disk"] = args.ngd_extract_to_disk
 
     if args.non_interactive:
         if not args.source:
