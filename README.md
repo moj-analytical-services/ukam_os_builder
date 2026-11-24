@@ -133,7 +133,7 @@ For a local base, all directories are derived under `work_dir`. For an S3 or Azu
 
 | Command | Purpose | Key options |
 |---|---|---|
-| `ukam-os-setup` | Create or update pipeline config interactively | `--config-out`, `--env-out`, `--overwrite-env`, `--non-interactive`, `--source`, `--package-id`, `--version-id` |
+| `ukam-os-setup` | Create or update pipeline config interactively | `--config-out`, `--env-out`, `--overwrite-env`, `--non-interactive`, `--source`, `--package-id`, `--version-id`, `--download-parts` |
 | `ukam-os-build` | Run pipeline stages (`download`, `extract`, `split`, `flatfile`, `all`) | `--config`, `--source`, `--env-file`, `--step`, `--overwrite`, `--list-only`, `--package-id`, `--version-id`, `--work-dir`, `--downloads-dir`, `--extracted-dir`, `--output-dir`, `--num-chunks`, `--duckdb-memory-limit`, `--parquet-compression`, `--parquet-compression-level`, `--ngd-excluded-stems`, `--abp-excluded-logical-statuses`, `--verbose` |
 
 ### Command notes

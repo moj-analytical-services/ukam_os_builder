@@ -8,6 +8,7 @@ from rich.console import Console
 from rich.panel import Panel
 
 from ukam_os_builder.api.api import load_existing_defaults, write_config_and_env
+from ukam_os_builder.api.settings import DEFAULT_DOWNLOAD_PARTS, MAX_DOWNLOAD_PARTS
 
 console = Console()
 
@@ -42,7 +43,7 @@ def _prompt_memory_limit(label: str, default: str = "") -> str | None:
         console.print("[red]Enter a memory limit in GB, e.g. 8GB.[/red]")
 
 
-def _prompt_int(label: str, default: int) -> int:
+def _prompt_int(label: str, default: int, *, max_value: int | None = None) -> int:
     while True:
         raw = console.input(f"{label} [{default}]: ", markup=False).strip()
         if not raw:
@@ -54,6 +55,9 @@ def _prompt_int(label: str, default: int) -> int:
             continue
         if value < 1:
             console.print("[red]Value must be >= 1.[/red]")
+            continue
+        if max_value is not None and value > max_value:
+            console.print(f"[red]Value must be <= {max_value}.[/red]")
             continue
         return value
 
@@ -114,6 +118,15 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--package-id", help="OS package ID (required in non-interactive mode).")
     parser.add_argument("--version-id", help="OS version ID (required in non-interactive mode).")
+    parser.add_argument(
+        "--download-parts",
+        type=int,
+        default=None,
+        help=(
+            "Concurrent HTTP byte ranges per large ZIP "
+            f"(1 = sequential, max {MAX_DOWNLOAD_PARTS}; e.g. 8 or 16)."
+        ),
+    )
     return parser
 
 
@@ -132,7 +145,12 @@ def main(argv: list[str] | None = None) -> int:
     if (api_key and not api_secret) or (api_secret and not api_key):
         parser.error("--api-key and --api-secret must be provided together")
 
+    if args.download_parts is not None and not (1 <= args.download_parts <= MAX_DOWNLOAD_PARTS):
+        parser.error(f"--download-parts must be between 1 and {MAX_DOWNLOAD_PARTS}")
+
     config = load_existing_defaults(config_out)
+    if args.download_parts is not None:
+        config["os_downloads"]["download_parts"] = args.download_parts
 
     if args.non_interactive:
         if not args.source:
@@ -176,7 +194,12 @@ def main(argv: list[str] | None = None) -> int:
         )
         config["paths"]["work_dir"] = work_dir
 
-        if _confirm("Configure advanced processing settings?", default_yes=False):
+        if _confirm("Configure advanced download and processing settings?", default_yes=False):
+            config["os_downloads"]["download_parts"] = _prompt_int(
+                "download_parts (1 = sequential, e.g. 8 or 16 for parallel downloads)",
+                int(config["os_downloads"].get("download_parts", DEFAULT_DOWNLOAD_PARTS)),
+                max_value=MAX_DOWNLOAD_PARTS,
+            )
             config["processing"]["num_chunks"] = _prompt_int(
                 "num_chunks",
                 int(config["processing"].get("num_chunks", 10)),
