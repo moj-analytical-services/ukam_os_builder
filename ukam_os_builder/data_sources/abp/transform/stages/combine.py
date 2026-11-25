@@ -71,6 +71,7 @@ def combine_and_dedupe(con: duckdb.DuckDBPyConnection) -> duckdb.DuckDBPyRelatio
             sr.postal_address_code,
             dp.udprn,
             sr.parent_uprn,
+            b.local_custodian_code,
             sr.hierarchy_level,
             sr.source,
             sr.variant_label,
@@ -78,4 +79,5 @@ def combine_and_dedupe(con: duckdb.DuckDBPyConnection) -> duckdb.DuckDBPyRelatio
         FROM source_ranked sr
         LEFT JOIN classification_best cb ON cb.uprn = sr.uprn
         LEFT JOIN delivery_point_best dp ON dp.uprn = sr.uprn
+        LEFT JOIN blpu b ON b.uprn = sr.uprn
     """)
